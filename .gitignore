@@ -1,0 +1,13 @@
+# --- secrets ---
+.env
+
+# --- python ---
+__pycache__/
+*.pyc
+venv/
+
+# --- runtime state / generated data ---
+.cache/
+data/
+logs/
+*.lock
