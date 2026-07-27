@@ -119,6 +119,7 @@ def build_country_digest(conn, country, day=None):
         "FROM articles WHERE country=? AND importance>=? AND fetched_at>=?",
         (country, settings.MIN_IMPORTANCE, graph_since)).fetchall()
     if not rows:
+        _write_feed(country, day_str, [], {})
         return 0
 
     # Док-частота субъектов по окну ЭТОЙ страны — самонастраивающийся словарь
@@ -159,14 +160,20 @@ def build_country_digest(conn, country, day=None):
 
     picked = _mmr_select(candidates, settings.TOP_N)
     picked.sort(key=lambda c: c["imp"], reverse=True)
+    translated = {}
     if picked:
         # переводим только то, что реально попало в дайджест — не весь
         # недельный граф (см. translate.py); ru/en пропускаются как есть.
         translated = translate.translate_missing(
             conn, [(c["url"], c["title"], c["text"], c["language"],
                     c["title_en"], c["text_en"]) for c in picked])
-        _write_feed(country, day_str, picked, translated)
         _record_sent(conn, country, day_str, picked)
+
+    # Пишем всегда, даже пустой. «Сегодня в этой стране ничего не набралось» —
+    # это ответ, и для подписки он выглядит как 200 с нулём записей. Раньше
+    # файла просто не было, и 43 фида висели в FreshRSS в ошибке постоянно:
+    # красный флаг переставал что-либо значить.
+    _write_feed(country, day_str, picked, translated)
     return len(picked)
 
 
