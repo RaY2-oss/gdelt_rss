@@ -23,6 +23,7 @@ from feedgen.feed import FeedGenerator
 
 import settings
 import db
+import importance as imp
 import translate
 
 log = logging.getLogger("gdelt_rss")
@@ -152,13 +153,22 @@ def _top_items(rows, country):
     titles = [r[8] or r[1] for r in rows]
     exclude = _TOKEN_RE.split(settings.country_display(country).lower())
     labels = _cluster(embs, settings.DEDUP_COSINE, titles=titles, exclude=exclude)
-    best = {}  # label -> (строка, эмбеддинг) с макс. importance
+    best, urls = {}, {}
     for row, emb, lab in zip(rows, embs, labels):
         lab = int(lab)
+        urls.setdefault(lab, []).append(row[0])
         if lab not in best or (row[5] or 0) > (best[lab][0][5] or 0):
             best[lab] = (row, emb)
-    picked = sorted(best.values(), key=lambda p: p[0][5] or 0, reverse=True)
-    return [row for row, _emb in picked]
+    # Оценка LLM квантована (96 % значений кратны 5), поэтому одной ею сортировать
+    # нельзя: в окне крупной страны сотни статей делят одно число и порядок внутри
+    # связки произволен. Второй ключ — охват сюжета по РАЗНЫМ доменам. Полный
+    # LexRank здесь не считается намеренно: это фид «все статьи» без TOP_N-отсечки,
+    # ранжирование в нём косметическое, а стоимость графа — ежечасная на 89 стран.
+    cov = {lab: imp.coverage_weight(imp.distinct_domains(u), settings.COVERAGE_FULL_AT)
+           for lab, u in urls.items()}
+    picked = sorted(best.items(),
+                    key=lambda kv: ((kv[1][0][5] or 0), cov[kv[0]]), reverse=True)
+    return [row for _lab, (row, _emb) in picked]
 
 
 def build_country(conn, country):

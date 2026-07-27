@@ -2,8 +2,10 @@
 """db.py — схема и соединение SQLite.
 
 Одна таблица articles: URL — ключ дедупа/кэша, importance — оценка LLM (0..100,
-NULL пока не оценено), embedding — e5 float32 blob (для e5-дедупа при сборке
-фида, без повторной загрузки модели). seen_urls — журнал уже обработанных URL
+NULL пока не оценено) — это ГЕЙТ релевантности, а не шкала ранжирования (она
+квантована, см. importance.py). Эмбеддингов два: embedding по заголовку —
+дедуп и кластеризация сюжетов; embedding_body по телу статьи — релевантность
+и LexRank. seen_urls — журнал уже обработанных URL
 (seen_store.py), чтобы не качать одно и то же между прогонами.
 """
 import sqlite3
@@ -23,9 +25,13 @@ CREATE TABLE IF NOT EXISTS articles (
     text_en      TEXT,             -- перевод текста статьи
     language     TEXT,
     title_hash   TEXT,              -- дешёвый дедуп одинаковых заголовков
-    embedding    BLOB,             -- e5 float32
+    embedding      BLOB,           -- e5 float32 по ЗАГОЛОВКУ: дедуп/кластеризация сюжетов
+    embedding_body BLOB,           -- e5 float32 по ТЕЛУ статьи: релевантность и LexRank
     entities     TEXT,              -- субъекты из GKG V1Persons/V1Organizations (см. entities.py)
-    importance   INTEGER            -- оценка LLM 0..100 + поправка на политический вес; NULL = не оценено
+    importance   INTEGER,           -- гейт релевантности 0..100; NULL = не оценено
+    scored_by    TEXT               -- 'llm' | 'gate': кто вынес вердикт. Обучающая
+                                    -- выборка берётся ТОЛЬКО по 'llm', иначе гейт
+                                    -- начнёт учиться на собственных решениях
 );
 CREATE INDEX IF NOT EXISTS idx_articles_country_time ON articles(country, fetched_at);
 CREATE INDEX IF NOT EXISTS idx_articles_unscored ON articles(importance) WHERE importance IS NULL;
@@ -40,6 +46,15 @@ CREATE TABLE IF NOT EXISTS digest_sent (
     embedding    BLOB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_digest_sent_country ON digest_sent(country);
+
+-- Состояние конвейера. Ключ gkg_cursor — последний ПОЛНОСТЬЮ обработанный
+-- 15-минутный тик GKG. Курсор двигается только после успешной обработки,
+-- поэтому ни один дамп не теряется из-за сбоя, разрыва сети или того, что
+-- предыдущий прогон ещё шёл.
+CREATE TABLE IF NOT EXISTS pipeline_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -69,10 +84,30 @@ def init() -> None:
             conn.execute("ALTER TABLE articles ADD COLUMN text_en TEXT")
         if "entities" not in cols:
             conn.execute("ALTER TABLE articles ADD COLUMN entities TEXT")
+        # Вторая колонка эмбеддингов (тело статьи). Досчитывается лениво
+        # для уже прошедших гейт статей — см. pipeline.embed_bodies().
+        if "embedding_body" not in cols:
+            conn.execute("ALTER TABLE articles ADD COLUMN embedding_body BLOB")
+        if "scored_by" not in cols:
+            conn.execute("ALTER TABLE articles ADD COLUMN scored_by TEXT")
         seen_store.ensure(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+
+
+def state_get(conn, key, default=None):
+    row = conn.execute("SELECT value FROM pipeline_state WHERE key=?", (key,)).fetchone()
+    return row[0] if row else default
+
+
+def state_set(conn, key, value):
+    conn.execute("INSERT INTO pipeline_state (key,value) VALUES (?,?) "
+                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                 (key, str(value)))
+    conn.commit()
 
 
 if __name__ == "__main__":

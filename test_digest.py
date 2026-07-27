@@ -9,6 +9,7 @@ import numpy as np
 import settings
 settings.DB_PATH = os.path.join(tempfile.mkdtemp(), "t.db")
 settings.OUTPUT_DIR = tempfile.mkdtemp()
+settings.LOG_DIR = tempfile.mkdtemp()
 settings.TOP_N = 3
 
 import db, digest
@@ -25,14 +26,64 @@ def _v(seed):
     return v
 
 
-def test_cluster_importance_coverage_boost():
+def _row(url, imp, vec, ents=""):
+    """(url,title,text,publish_date,fetched_at,importance,embedding,language,
+    title_en,text_en,embedding_body,entities) — как отдаёт SELECT дайджеста."""
+    return (url, "t", "x", None, NOW, imp, vec.tobytes(), "en", None, None,
+            vec.tobytes(), ents)
+
+
+def test_coverage_counts_domains_not_articles():
+    """Пять версий текста на ОДНОМ домене — один голос охвата, а не пять."""
     v = _v(0)
-    row_lo = ("u1", "t", "x", None, NOW, 30, v.tobytes())
-    row_hi = ("u2", "t", "x", None, NOW, 40, v.tobytes())
-    single = digest._cluster_importance([row_lo])
-    covered = digest._cluster_importance([row_lo, row_hi])
-    assert covered > max(30, 40), "два материала по сюжету должны обогнать одиночный скор"
-    assert single == 30
+    one_domain = {0: [_row(f"https://a.com/{i}", 40, v) for i in range(5)]}
+    five_domains = {0: [_row(f"https://s{i}.com/x", 40, v) for i in range(5)]}
+    a = digest._cluster_importance(one_domain, None)[0]
+    b = digest._cluster_importance(five_domains, None)[0]
+    assert b > a, (a, b)
+
+
+def test_coverage_saturates_instead_of_capping():
+    """Охват логарифмический: прирост убывает, но сюжет с 40 изданиями всё
+    ещё отличим от сюжета с 4 — прежняя линейная надбавка упирала оба в потолок."""
+    v = _v(0)
+    def cov(n):
+        cl = {0: [_row(f"https://s{i}.com/x", 40, v) for i in range(n)]}
+        return digest._cluster_importance(cl, None)[0]
+    # Сравнивать нужно РАВНЫЕ приращения числа изданий (2->4->6). На удвоениях
+    # (2->4->8) логарифм по построению даёт одинаковый шаг, и убывание не видно.
+    c2, c4, c6, c40 = cov(2), cov(4), cov(6), cov(40)
+    assert c2 < c4 < c6 <= c40
+    assert (c4 - c2) > (c6 - c4), "прирост обязан убывать — это и есть насыщение"
+
+
+def test_importance_is_continuous_and_breaks_llm_ties():
+    """Главное, ради чего всё затевалось: у сюжетов с ОДИНАКОВОЙ оценкой LLM
+    структурная важность разная, поэтому TOP_N-отбор перестаёт быть жеребьёвкой."""
+    clusters = {
+        0: [_row("https://a.com/1", 85, _v(0)), _row("https://b.com/1", 85, _v(0)),
+            _row("https://c.com/1", 85, _v(0))],
+        1: [_row("https://d.com/1", 85, _v(1))],
+        2: [_row("https://e.com/1", 85, _v(2)), _row("https://f.com/1", 85, _v(2))],
+    }
+    got = digest._cluster_importance(clusters, None)
+    assert len(set(got.values())) == len(got), f"связки остались: {got}"
+    assert got[0] > got[2] > got[1], got
+
+
+def test_entity_factor_lifts_national_story():
+    """Третий фактор — политический вес: сюжет с несколькими заметными
+    субъектами обгоняет сюжет с тем же охватом, но без фигурантов."""
+    v0, v1 = _v(0), _v(1)
+    df = {"tubitak": 5, "aselsan": 5, "ministry of industry": 5, "ali veli": 1}
+    clusters = {
+        0: [_row("https://a.com/1", 40, v0, "tubitak;aselsan;ministry of industry"),
+            _row("https://b.com/1", 40, v0, "tubitak;aselsan")],
+        1: [_row("https://c.com/1", 40, v1, "ali veli"),
+            _row("https://d.com/1", 40, v1, "ali veli")],
+    }
+    got = digest._cluster_importance(clusters, df)
+    assert got[0] > got[1], got
 
 
 def test_only_todays_articles_are_candidates():

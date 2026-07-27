@@ -35,6 +35,8 @@ from feedgen.feed import FeedGenerator
 
 import settings
 import db
+import entities
+import importance as imp
 import translate
 from feeds import _cluster, _pubdate, _mmr_select, _max_cosine, _TOKEN_RE  # переиспользуем кластеризацию, MMR и парсинг даты
 
@@ -46,10 +48,64 @@ def _row_date(row):
     return _pubdate(row[3], row[4]).date().isoformat()
 
 
-def _cluster_importance(cluster_rows):
-    base = max((r[5] or 0) for r in cluster_rows)
-    boost = settings.DIGEST_COVERAGE_BOOST * (len(cluster_rows) - 1)
-    return min(100, base + boost)
+def _body_emb(row):
+    """Эмбеддинг ТЕЛА статьи; пока не досчитан — откат на заголовочный.
+
+    Откат нужен только на переходный период (см. pipeline.embed_bodies):
+    у статей, собранных до появления колонки, тела ещё нет, и ронять из-за
+    этого дайджест незачем.
+    """
+    blob = row[10] if len(row) > 10 and row[10] else row[6]
+    return np.frombuffer(blob, np.float32)
+
+
+def _cluster_importance(clusters, ent_df):
+    """Непрерывная структурная важность сюжетов страны, БЕЗ участия LLM.
+
+    Прежняя формула — max(оценка LLM) + 5 за каждую доп. статью, потолок 100 —
+    ломалась дважды: оценка LLM квантована (сотни статей делят одно значение),
+    а линейная надбавка упиралась в потолок уже на четвёртой перепечатке.
+
+    Теперь три нормированных фактора (см. importance.py):
+      LexRank  — центральность сюжета в графе ДРУГИХ сюжетов этой же страны
+                 за окно, по эмбеддингам ТЕЛА статьи;
+      охват    — log от числа РАЗНЫХ доменов кластера (пять версий текста на
+                 одном сайте = один домен);
+      субъекты — политический вес по entities.py.
+
+    -> {label: важность в [0,1]}
+    """
+    labels = list(clusters)
+    reps = [max(clusters[lab], key=lambda r: r[5] or 0) for lab in labels]
+
+    # LexRank считается по сюжетам, а не по статьям: размер кластера уже учтён
+    # отдельным фактором охвата, и учитывать его дважды нельзя.
+    order = sorted(range(len(labels)), key=lambda i: reps[i][4] or "", reverse=True)
+    keep = set(order[:settings.LEXRANK_MAX_NODES])
+    lex = np.zeros(len(labels), dtype=np.float64)
+    idx = [i for i in range(len(labels)) if i in keep]
+    if idx:
+        sub = imp.lexrank(np.vstack([_body_emb(reps[i]) for i in idx]),
+                          settings.LEXRANK_DAMPING, settings.LEXRANK_MAX_ITER,
+                          settings.LEXRANK_TOL,
+                          domains=[imp.domain(reps[i][0]) for i in idx])
+        lex[idx] = imp.minmax(sub)
+
+    cov = np.array([imp.coverage_weight(imp.distinct_domains(r[0] for r in clusters[lab]),
+                                        settings.COVERAGE_FULL_AT)
+                    for lab in labels], dtype=np.float64)
+
+    if ent_df:
+        ent = np.array([max(entities.weight(
+            entities.prominent(r[11] if len(r) > 11 else "", ent_df,
+                               settings.ENTITY_MIN_DF), settings.ENTITY_FULL_AT)
+            for r in clusters[lab]) for lab in labels], dtype=np.float64)
+    else:
+        ent = np.zeros(len(labels), dtype=np.float64)
+
+    blended = imp.blend(lex, cov, ent, settings.IMPORTANCE_W_LEXRANK,
+                        settings.IMPORTANCE_W_COVERAGE, settings.IMPORTANCE_W_ENTITY)
+    return dict(zip(labels, blended))
 
 
 def build_country_digest(conn, country, day=None):
@@ -59,11 +115,19 @@ def build_country_digest(conn, country, day=None):
 
     rows = conn.execute(
         "SELECT url,title,text,publish_date,fetched_at,importance,embedding,"
-        "language,title_en,text_en "
+        "language,title_en,text_en,embedding_body,entities "
         "FROM articles WHERE country=? AND importance>=? AND fetched_at>=?",
         (country, settings.MIN_IMPORTANCE, graph_since)).fetchall()
     if not rows:
         return 0
+
+    # Док-частота субъектов по окну ЭТОЙ страны — самонастраивающийся словарь
+    # заметных персон/организаций (см. entities.py). Пока порог заметности не
+    # перешагнул никто, фактор выключается целиком, иначе он равномерно
+    # опустил бы всю малую страну.
+    ent_df = entities.document_freq(r[11] for r in rows)
+    if not any(v >= settings.ENTITY_MIN_DF for v in ent_df.values()):
+        ent_df = None
 
     embs = [np.frombuffer(r[6], np.float32) for r in rows]
     exclude = _TOKEN_RE.split(settings.country_display(country).lower())
@@ -75,8 +139,10 @@ def build_country_digest(conn, country, day=None):
     sent_embs = [np.frombuffer(r[0], np.float32) for r in conn.execute(
         "SELECT embedding FROM digest_sent WHERE country=?", (country,))]
 
+    cluster_imp = _cluster_importance(clusters, ent_df)
+
     candidates = []
-    for cluster_rows in clusters.values():
+    for lab, cluster_rows in clusters.items():
         today_rows = [r for r in cluster_rows if _row_date(r) == day_str]
         if not today_rows:
             continue  # сюжет без публикаций сегодня — не в этот дайджест
@@ -87,7 +153,7 @@ def build_country_digest(conn, country, day=None):
         candidates.append({
             "url": rep[0], "title": rep[1], "text": rep[2],
             "pdate": rep[3], "fa": rep[4],
-            "imp": _cluster_importance(cluster_rows), "emb": rep_emb,
+            "imp": cluster_imp[lab], "emb": rep_emb,
             "language": rep[7], "title_en": rep[8], "text_en": rep[9],
         })
 

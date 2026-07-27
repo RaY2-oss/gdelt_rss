@@ -8,6 +8,7 @@ import numpy as np
 import settings
 settings.DB_PATH = os.path.join(tempfile.mkdtemp(), "t.db")
 settings.OUTPUT_DIR = tempfile.mkdtemp()
+settings.LOG_DIR = tempfile.mkdtemp()
 settings.TOP_N = 3
 
 import db, feeds, pipeline
@@ -19,31 +20,9 @@ def test_parse_scores():
     assert pipeline._parse_scores('```json\n{"1": 999, "2": -5}\n```', 2) == {1: 100, 2: 0}
     assert pipeline._parse_scores('junk {"1": 50} tail', 3) == {1: 50}       # id вне диапазона отсекается
     assert pipeline._parse_scores('{"1": 10, "9": 90}', 3) == {1: 10}
-
-
-def test_adjust_by_political_weight():
-    """Поправка на политический вес: локальная заметка (одно громкое имя на всю
-    статью) уходит вниз, общенациональный сюжет — вверх. См. entities.py."""
-    import entities
-    corpus = ["ministry of education;ali veli",
-              "ministry of education;tubitak;aselsan",
-              "tubitak;aselsan;ministry of industry",
-              "tubitak;aselsan;ministry of industry;recep tayyip erdogan"]
-    df = entities.document_freq(corpus)
-
-    local = pipeline._adjust(50, corpus[0], df)
-    national = pipeline._adjust(50, corpus[3], df)
-    assert local < 50 < national, (local, national)
-    assert national <= 100 and local >= 0
-
-    # пустой словарь (страна ещё не набрала статистики) — оценка не трогается
-    assert pipeline._adjust(50, corpus[0], None) == 50
-    assert pipeline._adjust(50, corpus[0], {}) == 50
-
-    # accepted не должен провалиться ниже RELEVANCE_CUTOFF из-за штрафа:
-    # вердикт уже поставлен по сырой оценке, из фида _all статья не вылетает
-    assert pipeline._adjust(settings.RELEVANCE_CUTOFF + 1, "", df) > settings.RELEVANCE_CUTOFF
-    assert pipeline._adjust(settings.RELEVANCE_CUTOFF, "", df) == 0
+    # «Extra data»: два склеенных объекта — раньше это роняло весь батч
+    assert pipeline._parse_scores('{"1": 40}{"2": 50}', 2) == {1: 40}
+    assert pipeline._parse_scores('Here you go:\n{"1": 40}\nDone.', 2) == {1: 40}
 
 
 def test_title_hash():
@@ -64,58 +43,139 @@ def test_group_for_scoring_dedups_before_llm():
     assert sum(len(v) for v in groups.values()) == 3, "но оценка должна дойти до всех статей"
 
 
-def test_score_prefilter_gate_skips_llm_for_confident_rejects():
-    """prefilter.drop_mask отсеивает сюжет до LLM: importance=0 без вызова
-    _call_openrouter_raw, вердикт 'rejected' пишется в seen_urls."""
+def _mk_gate_articles(conn, country):
+    v_drop = np.zeros(settings.EMBEDDING_DIM, np.float32); v_drop[0] = 1
+    v_keep = np.zeros(settings.EMBEDDING_DIM, np.float32); v_keep[1] = 1
+    conn.execute("INSERT INTO articles (url,country,fetched_at,title,text,language,title_hash,embedding) "
+                 "VALUES (?,?,?,?,?,?,?,?)",
+                 (f"http://{country}/drop", country, "2026-07-20T00:00:00+00:00",
+                  "Drop Story", "text", "en", f"{country}hd", v_drop.tobytes()))
+    conn.execute("INSERT INTO articles (url,country,fetched_at,title,text,language,title_hash,embedding) "
+                 "VALUES (?,?,?,?,?,?,?,?)",
+                 (f"http://{country}/keep", country, "2026-07-20T00:01:00+00:00",
+                  "Keep Story", "text", "en", f"{country}hk", v_keep.tobytes()))
+    conn.commit()
+    return v_drop, v_keep
+
+
+def test_score_gate_drops_confident_rejects_without_llm():
+    """Нижний порог гейта: сюжет получает importance=0 и вердикт 'rejected'
+    без обращения к LLM, а строка помечается scored_by='gate' — чтобы не
+    попасть в обучающую выборку следующего train_prefilter.py."""
     from unittest.mock import patch
     import json
 
     db.init()
     conn = db.connect()
-    v_drop = np.zeros(settings.EMBEDDING_DIM, np.float32); v_drop[0] = 1
-    v_keep = np.zeros(settings.EMBEDDING_DIM, np.float32); v_keep[1] = 1
-    conn.execute("INSERT INTO articles (url,country,fetched_at,title,text,language,title_hash,embedding) "
-                 "VALUES (?,?,?,?,?,?,?,?)",
-                 ("http://p/drop", "prefland", "2026-07-20T00:00:00+00:00",
-                  "Drop Story", "text", "en", "hd", v_drop.tobytes()))
-    conn.execute("INSERT INTO articles (url,country,fetched_at,title,text,language,title_hash,embedding) "
-                 "VALUES (?,?,?,?,?,?,?,?)",
-                 ("http://p/keep", "prefland", "2026-07-20T00:01:00+00:00",
-                  "Keep Story", "text", "en", "hk", v_keep.tobytes()))
-    conn.commit()
-
+    v_drop, v_keep = _mk_gate_articles(conn, "prefland")
     calls = []
 
     def fake_openrouter(system, user, ref_url=None):
         calls.append(user)
         return json.dumps({"1": 80})
 
-    def fake_drop_mask(path, embeddings):
+    def fake_verdicts(path, embeddings, texts):
         # items идут в порядке rows (fetched_at DESC): keep первым, drop вторым
-        return np.array([False, True])
+        return [pipeline.prefilter.ASK, pipeline.prefilter.DROP]
 
     with patch.object(pipeline.prefilter, "is_ready", return_value=True), \
-         patch.object(pipeline.prefilter, "drop_mask", side_effect=fake_drop_mask), \
+         patch.object(pipeline.prefilter, "verdicts", side_effect=fake_verdicts), \
+         patch.object(pipeline.random, "random", return_value=1.0), \
          patch.object(pipeline, "_call_openrouter_raw", side_effect=fake_openrouter):
         pipeline.score()
 
-    assert len(calls) == 1, "предфильтр должен убрать отсеянный сюжет из LLM-батча"
+    assert len(calls) == 1, "гейт должен убрать отсеянный сюжет из LLM-батча"
     assert "Keep Story" in calls[0] and "Drop Story" not in calls[0]
 
-    imp_drop = conn.execute("SELECT importance FROM articles WHERE url=?",
-                             ("http://p/drop",)).fetchone()[0]
-    imp_keep = conn.execute("SELECT importance FROM articles WHERE url=?",
-                             ("http://p/keep",)).fetchone()[0]
-    assert imp_drop == 0, "уверенный отказ предфильтра -> importance=0 без LLM"
-    assert imp_keep == 80
+    row = lambda u: conn.execute(
+        "SELECT importance, scored_by FROM articles WHERE url=?", (u,)).fetchone()
+    assert row("http://prefland/drop") == (0, "gate")
+    assert row("http://prefland/keep") == (80, "llm")
 
-    v_drop_row = conn.execute("SELECT verdict, embedding FROM seen_urls WHERE url=?",
-                               ("http://p/drop",)).fetchone()
-    v_keep_row = conn.execute("SELECT verdict, embedding FROM seen_urls WHERE url=?",
-                               ("http://p/keep",)).fetchone()
+    v = conn.execute("SELECT verdict, embedding FROM seen_urls WHERE url=?",
+                     ("http://prefland/drop",)).fetchone()
     conn.close()
-    assert v_drop_row == ("rejected", v_drop.tobytes())
-    assert v_keep_row == ("accepted", v_keep.tobytes())
+    assert v == ("rejected", v_drop.tobytes())
+
+
+def test_score_gate_accepts_without_llm():
+    """Верхний порог: уверенный приём не покупается у LLM. Статья получает
+    PREFILTER_ACCEPT_SCORE — этого хватает, чтобы пройти MIN_IMPORTANCE и
+    попасть в кандидаты дайджеста, где порядок задаёт уже структурная
+    важность (importance.py), а не это число."""
+    from unittest.mock import patch
+
+    db.init()
+    conn = db.connect()
+    _mk_gate_articles(conn, "acceptland")
+    calls = []
+
+    with patch.object(pipeline.prefilter, "is_ready", return_value=True), \
+         patch.object(pipeline.prefilter, "verdicts",
+                      side_effect=lambda p, e, t: [pipeline.prefilter.KEEP] * len(e)), \
+         patch.object(pipeline.random, "random", return_value=1.0), \
+         patch.object(pipeline, "_call_openrouter_raw",
+                      side_effect=lambda *a, **k: calls.append(1) or "{}"):
+        pipeline.score()
+
+    assert not calls, "уверенный приём не должен тратить LLM-вызов"
+    got = dict(conn.execute("SELECT url, importance FROM articles WHERE country='acceptland'"))
+    sb = {r[0] for r in conn.execute("SELECT DISTINCT scored_by FROM articles WHERE country='acceptland'")}
+    verdicts = {r[0] for r in conn.execute(
+        "SELECT DISTINCT verdict FROM seen_urls WHERE url LIKE 'http://acceptland/%'")}
+    conn.close()
+    assert set(got.values()) == {settings.PREFILTER_ACCEPT_SCORE}, got
+    assert got["http://acceptland/keep"] >= settings.MIN_IMPORTANCE
+    assert sb == {"gate"}, "локальное решение не должно попасть в обучающую выборку"
+    assert verdicts == {"accepted"}
+
+
+def test_control_share_sends_gated_items_to_llm_anyway():
+    """Контрольная струя: часть потока идёт в LLM в обход гейта, иначе новых
+    независимых меток не появится и дрейф будет нечем заметить."""
+    from unittest.mock import patch
+    import json
+
+    db.init()
+    conn = db.connect()
+    _mk_gate_articles(conn, "ctrlland")
+    calls = []
+
+    with patch.object(pipeline.prefilter, "is_ready", return_value=True), \
+         patch.object(pipeline.prefilter, "verdicts",
+                      side_effect=lambda p, e, t: [pipeline.prefilter.DROP] * len(e)), \
+         patch.object(pipeline.random, "random", return_value=0.0), \
+         patch.object(pipeline, "_call_openrouter_raw",
+                      side_effect=lambda s_, u_, ref_url=None: calls.append(u_) or json.dumps({"1": 70, "2": 70})):
+        pipeline.score()
+
+    sb = {r[0] for r in conn.execute("SELECT DISTINCT scored_by FROM articles WHERE country='ctrlland'")}
+    conn.close()
+    assert len(calls) == 1, "при random()=0 гейт обязан пропустить всё в LLM"
+    assert sb == {"llm"}
+
+
+def test_missing_ids_stay_unscored_instead_of_being_rejected():
+    """Модель вернула не все id. Пропущенные НЕ получают ноль (это молчаливый
+    вердикт «отклонено» по несуждённой статье, который ушёл бы в обучающую
+    выборку) — остаются NULL и переоцениваются следующим прогоном."""
+    from unittest.mock import patch
+    import json
+
+    db.init()
+    conn = db.connect()
+    _mk_gate_articles(conn, "partial")
+
+    with patch.object(pipeline.prefilter, "is_ready", return_value=False), \
+         patch.object(pipeline, "_call_openrouter_raw",
+                      side_effect=lambda *a, **k: json.dumps({"1": 90})):
+        pipeline.score()
+
+    got = dict(conn.execute("SELECT url, importance FROM articles WHERE country='partial'"))
+    conn.close()
+    scored = [v for v in got.values() if v is not None]
+    assert len(scored) == 1 and scored[0] == 90, got
+    assert None in got.values(), "пропущенный моделью id обязан остаться NULL"
 
 
 def test_score_propagates_verdict_to_duplicate_group_in_seen_urls():

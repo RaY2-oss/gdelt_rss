@@ -18,9 +18,10 @@
     seen_urls, см. settings.PREFILTER_MIN_LABELS) — уверенные отказы не
     тратят LLM-вызов и сразу получают importance=0. Остальные батчами по
     LLM_BATCH уходят в _call_openrouter_raw (свой AI-стек, см. model_rotation.py),
-    модель ставит 0..100, к которым _adjust() прибавляет поправку на политический
-    вес статьи (заметные персоны/организации из GKG, см. entities.py — так
-    локальная заметка не добирается до порога дайджеста); сбой провайдеров -> importance остаётся NULL
+    модель ставит 0..100 — это ГЕЙТ релевантности, а не шкала ранжирования.
+    Политический вес субъектов сюда БОЛЬШЕ НЕ ПРИМЕШИВАЕТСЯ: он стал одним из
+    факторов структурной важности (importance.py), и правка гейта тем же
+    фактором давала бы двойной учёт; сбой провайдеров -> importance остаётся NULL
     (переоценка на следующем прогоне, как pending-вердикт). Каждый вердикт
     (accepted/rejected по settings.RELEVANCE_CUTOFF) пишется в seen_urls —
     это и есть обучающая выборка для prefilter'а следующего прогона.
@@ -32,6 +33,7 @@ import hashlib
 import io
 import json
 import logging
+import random
 import re
 import time
 import zipfile
@@ -47,7 +49,6 @@ from trafilatura import bare_extraction
 
 import settings
 import db
-import entities            # политический вес статьи по субъектам GKG (см. entities.py)
 import feeds                # локальный: переиспользуем _cluster для дедупа перед LLM
 import gkg_filter
 import seen_store
@@ -90,8 +91,14 @@ def get_model():
         # считает своей математикой (MLAS) с честной диспетчеризацией под
         # старый CPU; вектора совпадают с torch (cosine 1.0), поэтому уже
         # сохранённые в БД эмбеддинги остаются сравнимыми.
+        # local_files_only: модель целиком в кэше, и ходить за ней в сеть незачем.
+        # Без этого каждый прогон делает ~20 HEAD-запросов к huggingface.co —
+        # лишняя задержка и зависимость конвейера от стороннего сервиса.
+        # (HF_HUB_OFFLINE=1 здесь не годится: sentence-transformers всё равно
+        # пытается получить листинг репозитория и падает.)
         _model = SentenceTransformer(settings.EMBEDDING_MODEL, backend="onnx",
-                                     model_kwargs={"file_name": "onnx/model.onnx"})
+                                     model_kwargs={"file_name": "onnx/model.onnx"},
+                                     local_files_only=True)
     return _model
 
 
@@ -102,6 +109,8 @@ def _cfg(fips: str) -> dict:
 
 
 def gkg_timestamps(hours):
+    """Скользящее окно последних тиков. Оставлено для ручных прогонов;
+    штатный интервал задаёт pending_timestamps() по курсору."""
     now = datetime.now(timezone.utc)
     a = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
     return [(a - timedelta(minutes=15 * i)).strftime("%Y%m%d%H%M%S")
@@ -109,40 +118,123 @@ def gkg_timestamps(hours):
 
 
 def fetch_gkg_file(ts, translation=False):
+    """-> (DataFrame|None, статус). Статус: "ok" | "missing" | "error".
+
+    Различать обязательно: "missing" (404) — дамп не публиковался и не
+    появится; "error" — сеть/парсинг, тик надо повторить. От этого зависит,
+    можно ли двигать курсор дальше (см. collect_urls).
+    """
     url = (GKG_URL_TL if translation else GKG_URL_EN).format(ts=ts)
     try:
         r = requests.get(url, timeout=30)
         if r.status_code == 404:
-            return None
+            return None, "missing"
         r.raise_for_status()
         with zipfile.ZipFile(io.BytesIO(r.content)) as z, z.open(z.namelist()[0]) as f:
             return pd.read_csv(f, sep="\t", header=None, usecols=GKG_USECOLS,
                                names=GKG_COLNAMES, on_bad_lines="skip",
-                               low_memory=False, dtype=str, encoding_errors="replace")
+                               low_memory=False, dtype=str, encoding_errors="replace"), "ok"
     except Exception as exc:
         log.warning("GKG %s (tl=%s): %s", ts, translation, exc)
-        return None
+        return None, "error"
 
 
-def collect_urls():
-    """-> dict url -> (country_key, gkg_date, entities). Один проход по дампам, все страны."""
+def latest_published_ts():
+    """Последний опубликованный GDELT 15-минутный тик (из lastupdate.txt)."""
+    try:
+        r = requests.get(settings.GKG_LASTUPDATE_URL, timeout=30)
+        r.raise_for_status()
+        for line in r.text.splitlines():
+            parts = line.split()
+            if parts and parts[-1].endswith(".gkg.csv.zip"):
+                return parts[-1].rsplit("/", 1)[-1].split(".")[0]
+    except Exception as exc:
+        log.warning("lastupdate.txt недоступен (%s) — считаем тик по часам", exc)
+    return None
+
+
+def _ts_to_dt(ts):
+    return datetime.strptime(ts, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+
+
+def _floor_15(dt):
+    return dt.replace(minute=(dt.minute // 15) * 15, second=0, microsecond=0)
+
+
+def pending_timestamps(conn):
+    """Тики от курсора (не включая его) до последнего опубликованного.
+
+    Курсор — последний ПОЛНОСТЬЮ обработанный тик. Идём строго по возрастанию
+    и двигаем курсор потиково, поэтому обрыв в середине не теряет остаток:
+    следующий прогон продолжит с того же места.
+    """
+    latest = latest_published_ts()
+    latest_dt = (_ts_to_dt(latest) if latest
+                 else _floor_15(datetime.now(timezone.utc) - timedelta(minutes=15)))
+    cursor = db.state_get(conn, "gkg_cursor")
+    if cursor:
+        start = _ts_to_dt(cursor) + timedelta(minutes=15)
+    else:
+        # Первый прогон: курсора нет, берём обычное окно.
+        start = latest_dt - timedelta(hours=settings.COLLECT_LOOKBACK_HOURS)
+    out = []
+    cur = start
+    while cur <= latest_dt:
+        out.append(cur.strftime("%Y%m%d%H%M%S"))
+        cur += timedelta(minutes=15)
+    backlog = len(out)
+    if backlog > settings.GKG_MAX_TICKS_PER_RUN:
+        out = out[:settings.GKG_MAX_TICKS_PER_RUN]
+        log.info("Отставание по дампам: %d тиков, берём %d — остальное догоним "
+                 "следующими прогонами", backlog, len(out))
+    return out
+
+
+def collect_urls(conn, ts_list=None):
+    """-> dict url -> (country_key, gkg_date, entities).
+
+    Интервал тиков задаёт курсор (pending_timestamps), а не скользящее окно:
+    каждый дамп обрабатывается ровно один раз и ни один не пропускается.
+    Курсор двигается потиково и только после успешной обработки.
+    """
     cfgs = {k: _cfg(fips) for k, fips in settings.COUNTRIES.items()}
     stats = {k: {} for k in cfgs}
     found = {}
-    ts_list = gkg_timestamps(settings.COLLECT_LOOKBACK_HOURS)
-    log.info("GKG: %d тиков x 2 потока x %d стран", len(ts_list), len(cfgs))
-    for i, ts in enumerate(ts_list, 1):
+    ts_list = pending_timestamps(conn) if ts_list is None else ts_list
+    if not ts_list:
+        log.info("GKG: новых дампов нет — курсор на последнем опубликованном тике")
+        return found
+    log.info("GKG: %d тиков x 2 потока x %d стран (с %s по %s)",
+             len(ts_list), len(cfgs), ts_list[0], ts_list[-1])
+    now = datetime.now(timezone.utc)
+    for ts in ts_list:
+        statuses = []
         for tl in (False, True):
-            dfr = fetch_gkg_file(ts, translation=tl)
+            dfr, st = fetch_gkg_file(ts, translation=tl)
+            statuses.append(st)
             if dfr is None or dfr.empty:
                 continue
             for ck, cfg in cfgs.items():
                 for url, gdate, ents in gkg_filter.select(dfr, cfg, stats[ck]):
                     found.setdefault(url, (ck, gdate, ents))  # первая страна выигрывает
+        age_min = (now - _ts_to_dt(ts)).total_seconds() / 60.0
+        if "ok" in statuses:
+            db.state_set(conn, "gkg_cursor", ts)
+        elif all(st == "missing" for st in statuses) and age_min >= settings.GKG_HOLE_AGE_MIN:
+            # Дырка в публикации GDELT: дампа нет и уже не будет. Двигаем курсор,
+            # иначе конвейер встанет на ней навсегда.
+            log.warning("GKG %s: дампов нет (возраст %.0f мин) — считаем дыркой", ts, age_min)
+            db.state_set(conn, "gkg_cursor", ts)
+        else:
+            # Свежий тик ещё не опубликован или сеть подвела — курсор не двигаем,
+            # повторим на следующем прогоне.
+            log.info("GKG %s: пока недоступен (%s) — остановка, продолжим позже",
+                     ts, ",".join(statuses))
+            break
         time.sleep(settings.GKG_FETCH_DELAY)
     passed = sum(s.get("passed", 0) for s in stats.values())
-    log.info("GKG готово: уникальных URL %d (прошло строк по всем странам %d)",
-             len(found), passed)
+    log.info("GKG готово: уникальных URL %d (прошло строк по всем странам %d), "
+             "курсор на %s", len(found), passed, db.state_get(conn, "gkg_cursor"))
     return found
 
 
@@ -197,11 +289,11 @@ def _is_non_event(title, text):
 
 def collect():
     """Сбор + запись новых статей (importance=NULL)."""
-    found = collect_urls()
-    if not found:
-        return 0
     conn = db.connect()
     try:
+        found = collect_urls(conn)
+        if not found:
+            return 0
         seen_store.ensure(conn)
         final = seen_store.final_urls(conn, found.keys())
         # title_hash'и, уже присутствующие в окне БД (дешёвый дедуп до LLM).
@@ -274,6 +366,42 @@ def _mark_seen(conn, pending):
     seen_store.mark(conn, [(u, 0, v, e) for (u, _c, v, e) in pending], day)
 
 
+
+def embed_bodies(limit=None):
+    """Досчитывает embedding_body статьям, прошедшим гейт релевантности.
+
+    Тело эмбеддится не всему потоку, а только тому, что реально попадёт в фид
+    и в граф важности (importance > RELEVANCE_CUTOFF) — это ~20 % собранного,
+    поэтому вторая колонка обходится впятеро дешевле первой. Заголовочный
+    эмбеддинг остаётся у всех: он нужен для дедупа ещё до оценки.
+
+    Ограничение на прогон (settings.EMBED_BODY_MAX_PER_RUN) не даёт стадии
+    растянуть прогон на исторических хвостах; недосчитанное подберёт следующий.
+    """
+    limit = settings.EMBED_BODY_MAX_PER_RUN if limit is None else limit
+    conn = db.connect()
+    try:
+        rows = conn.execute(
+            "SELECT url, text FROM articles "
+            "WHERE embedding_body IS NULL AND text IS NOT NULL AND importance > ? "
+            "ORDER BY fetched_at DESC LIMIT ?",
+            (settings.RELEVANCE_CUTOFF, int(limit))).fetchall()
+        if not rows:
+            log.info("Эмбеддинг тел: всё посчитано")
+            return 0
+        embs = _embed([(r[1] or "")[:settings.EMBED_BODY_CHARS] for r in rows])
+        conn.executemany("UPDATE articles SET embedding_body=? WHERE url=?",
+                         [(e.tobytes(), r[0]) for r, e in zip(rows, embs)])
+        conn.commit()
+        left = conn.execute(
+            "SELECT COUNT(*) FROM articles WHERE embedding_body IS NULL "
+            "AND text IS NOT NULL AND importance > ?",
+            (settings.RELEVANCE_CUTOFF,)).fetchone()[0]
+        log.info("Эмбеддинг тел: посчитано %d, осталось в очереди %d", len(rows), left)
+        return len(rows)
+    finally:
+        conn.close()
+
 # ── Фаза оценки важности ────────────────────────────────────────────────────
 
 def _score_prompt(country_disp):
@@ -311,12 +439,27 @@ def _score_prompt(country_disp):
 
 
 def _parse_scores(content, n):
-    raw = content.strip()
+    """Ответ модели -> {id: оценка}. Возвращает ТОЛЬКО те id, по которым
+    модель реально высказалась: пропущенные не подставляются нулём (это
+    молча помечало бы статью отклонённой, хотя её никто не судил).
+
+    Разбор через raw_decode, а не `re.search(r"{.*}")`: жадная регулярка при
+    двух объектах в ответе хватала всё от первой { до последней } и падала с
+    «Extra data» — 58 таких случаев за сутки, каждый терял батч до 20 сюжетов.
+    raw_decode читает первый валидный объект и игнорирует хвост.
+    """
+    raw = (content or "").strip()
     if raw.startswith("```"):
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw).strip()
-    m = re.search(r"\{.*\}", raw, re.S)
-    obj = json.loads(m.group(0) if m else raw)
+    obj, start = None, raw.find("{")
+    if start >= 0:
+        try:
+            obj, _end = json.JSONDecoder().raw_decode(raw[start:])
+        except ValueError:
+            obj = None
+    if obj is None:
+        obj = json.loads(raw)     # не разобралось — пусть падает, вызывающий залогирует
     out = {}
     for k, v in (obj.items() if isinstance(obj, dict) else []):
         try:
@@ -352,26 +495,6 @@ def _group_for_scoring(rows):
     return list(reps.items()), groups
 
 
-def _adjust(llm_score, ents, ent_df):
-    """Оценка LLM + поправка на политический вес статьи (см. entities.py).
-
-    Ниже RELEVANCE_CUTOFF штраф статью не опускает: вердикт accepted/rejected
-    уже поставлен по СЫРОЙ оценке LLM (и он же — разметка для предфильтра),
-    а из широкого фида _all статья вылетать не должна. Фактор нужен, чтобы
-    локальная заметка не добиралась до MIN_IMPORTANCE дайджеста.
-
-    ent_df пустой/None -> оценка не трогается: словаря по этой стране ещё нет
-    (см. score())."""
-    if not ent_df:
-        return llm_score
-    w = entities.weight(entities.prominent(ents, ent_df, settings.ENTITY_MIN_DF),
-                        settings.ENTITY_FULL_AT)
-    adj = llm_score + round(settings.ENTITY_BONUS * w
-                            - settings.ENTITY_PENALTY * (1.0 - w))
-    floor = settings.RELEVANCE_CUTOFF + 1 if llm_score > settings.RELEVANCE_CUTOFF else 0
-    return max(floor, min(100, adj))
-
-
 def score():
     """Оценивает важность необработанных статей (importance IS NULL) по странам.
     Перед обращением к LLM статьи внутри страны схлопываются по сюжету
@@ -397,36 +520,48 @@ def score():
                 (country,)).fetchall()
             # url -> np.ndarray (seen_store.mark сам вызывает .tobytes(), сырой blob не подходит)
             url_emb = {r[0]: (np.frombuffer(r[3], np.float32) if r[3] else None) for r in rows}
-            url_ents = {r[0]: r[4] for r in rows}
-            # Док-частота субъектов по окну ЭТОЙ страны (таблица и так хранит
-            # только KEEP_HOURS, см. main.prune) — самонастраивающийся словарь
-            # заметных персон/организаций для _adjust().
-            ent_df = entities.document_freq(
-                r[0] for r in conn.execute(
-                    "SELECT entities FROM articles WHERE country=?", (country,)))
-            # Пока в окне страны ни один субъект не перешагнул порог заметности,
-            # словаря фактически нет: включённый фактор просто равномерно уронил
-            # бы всю малую страну ниже MIN_IMPORTANCE. Выключаем его целиком.
-            if not any(v >= settings.ENTITY_MIN_DF for v in ent_df.values()):
-                ent_df = None
             disp = settings.country_display(country)
             items, groups = _group_for_scoring(rows)
 
             to_llm = items
             if prefilter.is_ready(settings.PREFILTER_PATH):
                 reps_embs = np.array([emb for _lab, (_u, _t, _x, emb) in items], np.float32)
-                mask = prefilter.drop_mask(settings.PREFILTER_PATH, reps_embs)
-                to_llm = [it for it, drop in zip(items, mask) if not drop]
-                dropped_labs = [lab for (lab, _rep), drop in zip(items, mask) if drop]
-                if dropped_labs:
-                    ups = [(0, url) for lab in dropped_labs for url in groups[lab]]
-                    marks = [(url, 0, "rejected", url_emb.get(url)) for _sc, url in ups]
-                    conn.executemany("UPDATE articles SET importance=? WHERE url=?", ups)
+                reps_txt = [((t or "") + " \n " + (x or "")[:settings.PREFILTER_TEXT_CHARS])
+                            for _lab, (_u, t, x, _e) in items]
+                verds = prefilter.verdicts(settings.PREFILTER_PATH, reps_embs, reps_txt)
+                # Контрольная струя: доля потока уходит в LLM в обход гейта.
+                # Иначе новых НЕЗАВИСИМЫХ меток не появится, гейт замкнётся на
+                # собственных решениях, и заметить дрейф будет нечем.
+                verds = [prefilter.ASK
+                         if random.random() < settings.PREFILTER_CONTROL_SHARE else v
+                         for v in verds]
+                to_llm, ups, marks = [], [], []
+                n_drop = n_keep = 0
+                for lab_rep, v in zip(items, verds):
+                    lab = lab_rep[0]
+                    if v == prefilter.ASK:
+                        to_llm.append(lab_rep)
+                        continue
+                    if v == prefilter.DROP:
+                        sc, verdict = 0, "rejected"
+                        n_drop += 1
+                    else:
+                        sc, verdict = settings.PREFILTER_ACCEPT_SCORE, "accepted"
+                        n_keep += 1
+                    for url in groups[lab]:
+                        ups.append((sc, url))
+                        marks.append((url, 0, verdict, url_emb.get(url)))
+                if ups:
+                    # scored_by='gate' — эти строки НЕ попадут в обучающую выборку
+                    # следующего train_prefilter.py (см. его _load).
+                    conn.executemany(
+                        "UPDATE articles SET importance=?, scored_by='gate' WHERE url=?", ups)
                     seen_store.mark(conn, marks, day)
                     conn.commit()
                     total += len(ups)
-                    log.info("  %s: предфильтр отсеял %d/%d сюжетов без LLM",
-                             country, len(dropped_labs), len(items))
+                    log.info("  %s: гейт решил сам %d сюжетов из %d "
+                             "(отказ %d, приём %d) — без LLM",
+                             country, n_drop + n_keep, len(items), n_drop, n_keep)
 
             log.info("  %s: %d статей -> %d сюжетов на оценку LLM (сэкономлено %d обращений)",
                      country, len(rows), len(to_llm), len(rows) - len(to_llm))
@@ -444,14 +579,25 @@ def score():
                 except Exception as exc:
                     log.warning("  %s: разбор оценок не удался (%s)", country, exc)
                     continue
-                ups, marks = [], []
+                ups, marks, missing = [], [], 0
                 for i, (lab, _rep) in enumerate(batch, 1):
-                    sc = scores.get(i, 0)
+                    if i not in scores:
+                        # Модель не вернула оценку по этому id. Ноль тут ставить
+                        # нельзя: это вердикт «отклонено» по статье, которую
+                        # никто не судил, и он же уйдёт в обучающую выборку.
+                        # Оставляем importance=NULL — следующий прогон переоценит.
+                        missing += 1
+                        continue
+                    sc = scores[i]
                     verdict = "accepted" if sc > settings.RELEVANCE_CUTOFF else "rejected"
                     for url in groups[lab]:
-                        ups.append((_adjust(sc, url_ents.get(url), ent_df), url))
+                        ups.append((sc, url))
                         marks.append((url, 0, verdict, url_emb.get(url)))
-                conn.executemany("UPDATE articles SET importance=? WHERE url=?", ups)
+                if missing:
+                    log.warning("  %s: модель пропустила %d/%d id — отложены до "
+                                "следующего прогона", country, missing, len(batch))
+                conn.executemany(
+                    "UPDATE articles SET importance=?, scored_by='llm' WHERE url=?", ups)
                 seen_store.mark(conn, marks, day)
                 conn.commit()
                 total += len(ups)
