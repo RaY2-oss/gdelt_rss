@@ -10,14 +10,14 @@
 пока держится в 7-дневном окне).
 
 Шаги на страну:
-    1. articles за 7 дней (importance IS NOT NULL) — граф сюжетов.
-    2. кластеризация e5-косинусом (переиспользует feeds._cluster) — один
-       кластер = один сюжет, растянутый на несколько дней.
-    3. важность кластера = максимум importance статей + линейный буст за
-       охват (число статей за неделю) — так пара заметок за два дня подряд
-       обгоняет одиночную статью с той же LLM-оценкой.
+    1. articles за 7 дней, прошедшие гейт релевантности, — граф сюжетов.
+    2. кластеризация e5-косинусом (feeds.cluster_rows) — один кластер = один
+       сюжет, растянутый на несколько дней.
+    3. важность кластера — структурная (feeds.rank -> importance.structural):
+       LexRank по эмбеддингам тел + охват по РАЗНЫМ доменам + вес субъектов.
+       Оценка LLM в ней не участвует: она двоичная, «по теме или нет».
     4. кластер участвует в дайджесте ТОЛЬКО если среди его статей есть хотя
-       бы одна, вышедшая сегодня; представитель — самая важная из сегодняшних.
+       бы одна, вышедшая сегодня; представитель — самая свежая из сегодняшних.
     5. кластеры, чей представитель косинусно совпадает с уже отправленным
        ранее (digest_sent), отбрасываются — не повторяем сюжет.
     6. MMR по оставшимся кандидатам (важность кластера vs похожесть на уже
@@ -35,46 +35,16 @@ from feedgen.feed import FeedGenerator
 
 import settings
 import db
-import entities
-import importance as imp
+import feeds
 import translate
-from feeds import _cluster, _pubdate, _mmr_select, _max_cosine, _TOKEN_RE  # переиспользуем кластеризацию, MMR и парсинг даты
+from feeds import _pubdate, _mmr_select, _max_cosine  # переиспользуем MMR и парсинг даты
 
 log = logging.getLogger("gdelt_rss")
 
 
 def _row_date(row):
-    """row: (url,title,text,publish_date,fetched_at,importance,embedding)."""
+    """row: 12 колонок, см. feeds._SELECT."""
     return _pubdate(row[3], row[4]).date().isoformat()
-
-
-def _cluster_importance(clusters, ent_df):
-    """Непрерывная структурная важность сюжетов страны, БЕЗ участия LLM.
-
-    Прежняя формула — max(оценка LLM) + 5 за каждую доп. статью, потолок 100 —
-    ломалась дважды: оценка LLM квантована (сотни статей делят одно значение),
-    а линейная надбавка упиралась в потолок уже на четвёртой перепечатке.
-
-    Теперь три нормированных фактора (см. importance.py):
-      LexRank  — центральность сюжета в графе ДРУГИХ сюжетов этой же страны
-                 за окно, по эмбеддингам ТЕЛА статьи;
-      охват    — log от числа РАЗНЫХ доменов кластера (пять версий текста на
-                 одном сайте = один домен);
-      субъекты — политический вес по entities.py.
-
-    -> {label: важность в [0,1]}
-    """
-    labels = list(clusters)
-    # LexRank считается по сюжетам, а не по статьям: размер кластера уже учтён
-    # отдельным фактором охвата, и учитывать его дважды нельзя.
-    reps = [max(clusters[lab], key=lambda r: r[5] or 0) for lab in labels]
-    blended = imp.structural(
-        [imp.body_emb(r[10] if len(r) > 10 else None, r[6]) for r in reps],
-        [[r[0] for r in clusters[lab]] for lab in labels],
-        [[r[11] if len(r) > 11 else "" for r in clusters[lab]] for lab in labels],
-        ent_df,
-        fresh=[r[4] for r in reps])
-    return dict(zip(labels, blended))
 
 
 def build_country_digest(conn, country, day=None):
@@ -83,44 +53,33 @@ def build_country_digest(conn, country, day=None):
                    timedelta(days=settings.DIGEST_GRAPH_DAYS)).isoformat()
 
     rows = conn.execute(
-        "SELECT url,title,text,publish_date,fetched_at,importance,embedding,"
-        "language,title_en,text_en,embedding_body,entities "
         # Граница приёма, а не отдельный порог важности: LLM решает только «по
         # теме или нет», отбор в дайджест делают TOP_N и MMR по структурной
         # важности. Прежний MIN_IMPORTANCE=40 резал по квантованной оценке и
         # выбрасывал сюжеты ещё до того, как граф успевал их взвесить.
-        "FROM articles WHERE country=? AND importance>? AND fetched_at>=?",
+        feeds._SELECT + "WHERE country=? AND importance>? AND fetched_at>=?",
         (country, settings.RELEVANCE_CUTOFF, graph_since)).fetchall()
     if not rows:
         _write_feed(country, day_str, [], {})
         return 0
 
-    # Док-частота субъектов по окну ЭТОЙ страны — самонастраивающийся словарь
-    # заметных персон/организаций (см. entities.py). Пока порог заметности не
-    # перешагнул никто, фактор выключается целиком, иначе он равномерно
-    # опустил бы всю малую страну.
-    ent_df = entities.document_freq(r[11] for r in rows)
-    if not any(v >= settings.ENTITY_MIN_DF for v in ent_df.values()):
-        ent_df = None
-
-    embs = [np.frombuffer(r[6], np.float32) for r in rows]
-    exclude = _TOKEN_RE.split(settings.country_display(country).lower())
-    labels = _cluster(embs, settings.DEDUP_COSINE, titles=[r[1] for r in rows], exclude=exclude)
-    clusters = {}
-    for row, lab in zip(rows, labels):
-        clusters.setdefault(int(lab), []).append(row)
+    # Кластеризация и важность — те же, что у фида и витрины (feeds.py): три
+    # ленты обязаны считать один и тот же сюжет одним и тем же, иначе дайджест
+    # выносит наверх то, чего в фиде рядом нет.
+    clusters = feeds.cluster_rows(rows, country)
+    cluster_imp = dict(feeds.rank(clusters))
 
     sent_embs = [np.frombuffer(r[0], np.float32) for r in conn.execute(
         "SELECT embedding FROM digest_sent WHERE country=?", (country,))]
-
-    cluster_imp = _cluster_importance(clusters, ent_df)
 
     candidates = []
     for lab, cluster_rows in clusters.items():
         today_rows = [r for r in cluster_rows if _row_date(r) == day_str]
         if not today_rows:
             continue  # сюжет без публикаций сегодня — не в этот дайджест
-        rep = max(today_rows, key=lambda r: r[5] or 0)
+        # Внутри кластера это один сюжет, а оценка LLM теперь двоичная и
+        # представителя не выбирает — берём самую свежую статью дня.
+        rep = max(today_rows, key=lambda r: r[4] or "")
         rep_emb = np.frombuffer(rep[6], np.float32)
         if _max_cosine(rep_emb, sent_embs) >= settings.DEDUP_COSINE:
             continue  # уже был в одном из прошлых дайджестов

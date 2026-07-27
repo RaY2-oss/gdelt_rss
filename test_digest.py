@@ -12,7 +12,7 @@ settings.OUTPUT_DIR = tempfile.mkdtemp()
 settings.LOG_DIR = tempfile.mkdtemp()
 settings.TOP_N = 3
 
-import db, digest
+import db, digest, importance as imp
 from datetime import datetime, timedelta, timezone
 
 TODAY = datetime.now(timezone.utc).date().isoformat()
@@ -26,11 +26,23 @@ def _v(seed):
     return v
 
 
-def _row(url, imp, vec, ents=""):
-    """(url,title,text,publish_date,fetched_at,importance,embedding,language,
-    title_en,text_en,embedding_body,entities) — как отдаёт SELECT дайджеста."""
-    return (url, "t", "x", None, NOW, imp, vec.tobytes(), "en", None, None,
+def _row(url, score, vec, ents=""):
+    """12 колонок feeds._SELECT — форма строки у фида, витрины и дайджеста одна."""
+    return (url, "t", "x", None, NOW, score, vec.tobytes(), "en", None, None,
             vec.tobytes(), ents)
+
+
+def _cluster_imp(clusters, ent_df):
+    """{label: важность} — то же, что делает feeds.rank, но с явным ent_df:
+    формула живёт в importance.structural (одна на все три ленты), а тесты
+    ниже проверяют именно её, а не подсчёт док-частоты."""
+    labels = list(clusters)
+    reps = [max(clusters[lab], key=lambda r: r[4] or "") for lab in labels]
+    return dict(zip(labels, imp.structural(
+        [imp.body_emb(r[10], r[6]) for r in reps],
+        [[r[0] for r in clusters[lab]] for lab in labels],
+        [[r[11] or "" for r in clusters[lab]] for lab in labels],
+        ent_df, fresh=[r[4] for r in reps])))
 
 
 def test_coverage_counts_domains_not_articles():
@@ -38,8 +50,8 @@ def test_coverage_counts_domains_not_articles():
     v = _v(0)
     one_domain = {0: [_row(f"https://a.com/{i}", 40, v) for i in range(5)]}
     five_domains = {0: [_row(f"https://s{i}.com/x", 40, v) for i in range(5)]}
-    a = digest._cluster_importance(one_domain, None)[0]
-    b = digest._cluster_importance(five_domains, None)[0]
+    a = _cluster_imp(one_domain, None)[0]
+    b = _cluster_imp(five_domains, None)[0]
     assert b > a, (a, b)
 
 
@@ -49,7 +61,7 @@ def test_coverage_saturates_instead_of_capping():
     v = _v(0)
     def cov(n):
         cl = {0: [_row(f"https://s{i}.com/x", 40, v) for i in range(n)]}
-        return digest._cluster_importance(cl, None)[0]
+        return _cluster_imp(cl, None)[0]
     # Сравнивать нужно РАВНЫЕ приращения числа изданий (2->4->6). На удвоениях
     # (2->4->8) логарифм по построению даёт одинаковый шаг, и убывание не видно.
     c2, c4, c6, c40 = cov(2), cov(4), cov(6), cov(40)
@@ -66,7 +78,7 @@ def test_importance_is_continuous_and_breaks_llm_ties():
         1: [_row("https://d.com/1", 85, _v(1))],
         2: [_row("https://e.com/1", 85, _v(2)), _row("https://f.com/1", 85, _v(2))],
     }
-    got = digest._cluster_importance(clusters, None)
+    got = _cluster_imp(clusters, None)
     assert len(set(got.values())) == len(got), f"связки остались: {got}"
     assert got[0] > got[2] > got[1], got
 
@@ -82,7 +94,7 @@ def test_entity_factor_lifts_national_story():
         1: [_row("https://c.com/1", 40, v1, "ali veli"),
             _row("https://d.com/1", 40, v1, "ali veli")],
     }
-    got = digest._cluster_importance(clusters, df)
+    got = _cluster_imp(clusters, df)
     assert got[0] > got[1], got
 
 
