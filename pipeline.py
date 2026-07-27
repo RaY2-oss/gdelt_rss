@@ -17,8 +17,11 @@
     сначала проходят через prefilter (если накоплено достаточно вердиктов в
     seen_urls, см. settings.PREFILTER_MIN_LABELS) — уверенные отказы не
     тратят LLM-вызов и сразу получают importance=0. Остальные батчами по
-    LLM_BATCH уходят в _call_openrouter_raw (свой AI-стек, см. model_rotation.py),
-    модель ставит 0..100 — это ГЕЙТ релевантности, а не шкала ранжирования.
+    LLM_BATCH уходят в _call_openrouter_raw (свой AI-стек, см. model_rotation.py).
+    Решение модели ДВОИЧНОЕ: «по теме или нет», без градаций. Прежняя шкала
+    0..100 была фикцией — 96 % значений оказывались кратны пяти, и в окне
+    крупной страны сотни статей делили одно число. Ранжирует теперь граф
+    (importance.structural), а гейт только пускает или не пускает.
     Политический вес субъектов сюда БОЛЬШЕ НЕ ПРИМЕШИВАЕТСЯ: он стал одним из
     факторов структурной важности (importance.py), и правка гейта тем же
     фактором давала бы двойной учёт; сбой провайдеров -> importance остаётся NULL
@@ -82,21 +85,31 @@ NON_EVENT = [r"\binterview\b", r"\bopinion\b", r"\beditorial\b", r"\bcolumn\b",
 
 
 def get_model():
+    """Движок эмбеддингов. С 2026-07 это embedder.py: onnxruntime напрямую,
+    без sentence-transformers и без torch.
+
+    Причина замены — две поломки подряд. (1) torch+MKL на CPU этого VPS (нет
+    AVX) выполняет AVX-инструкцию, и ядро убивает процесс по SIGILL. (2) Связка
+    sentence-transformers 5.6 / optimum 2.1 при local_files_only=True резолвила
+    onnx/model.onnx в None, после чего пыталась конвертировать модель сама —
+    через torch. Прогон вис навсегда, держа 2.2 ГБ.
+
+    Вектора сверены с уже лежащими в БД: косинус 1.000000 на 40 заголовках,
+    так что DEDUP_COSINE и кластеризация продолжают работать на старых данных.
+    Прежняя реализация сохранена ниже как _get_model_st().
+    """
+    import embedder
+    return embedder.get_engine()
+
+
+def _get_model_st():
+    """НЕ ИСПОЛЬЗУЕТСЯ. Старый путь через sentence-transformers, оставлен для
+    отката: если embedder.py окажется неверным, поменять вызов в get_model().
+    Внимание: требует рабочего torch, которого на этом CPU нет."""
     global _model
     if _model is None:
         from sentence_transformers import SentenceTransformer
         log.info("Загрузка e5-модели %s ...", settings.EMBEDDING_MODEL)
-        # backend="onnx", а не torch: у процессора этого VPS нет AVX, а MKL
-        # внутри torch+cpu всё равно выполняет AVX-инструкцию и ядро убивает
-        # процесс по SIGILL (см. README, «Известные проблемы»). onnxruntime
-        # считает своей математикой (MLAS) с честной диспетчеризацией под
-        # старый CPU; вектора совпадают с torch (cosine 1.0), поэтому уже
-        # сохранённые в БД эмбеддинги остаются сравнимыми.
-        # local_files_only: модель целиком в кэше, и ходить за ней в сеть незачем.
-        # Без этого каждый прогон делает ~20 HEAD-запросов к huggingface.co —
-        # лишняя задержка и зависимость конвейера от стороннего сервиса.
-        # (HF_HUB_OFFLINE=1 здесь не годится: sentence-transformers всё равно
-        # пытается получить листинг репозитория и падает.)
         _model = SentenceTransformer(settings.EMBEDDING_MODEL, backend="onnx",
                                      model_kwargs={"file_name": "onnx/model.onnx"},
                                      local_files_only=True)
@@ -439,7 +452,7 @@ def _score_prompt(country_disp):
         f"or R&D expansion, major funding rounds;\n"
         f"  E. Universities and research institutions acting at national scale — "
         f"research funding, flagship programmes, international academic partnerships.\n"
-        f"Score 0-5 (no matter how newsworthy it otherwise is) if the item is "
+        f"Answer no (no matter how newsworthy it otherwise is) if the item is "
         f"instead: purely local/municipal/campus news, a single school or "
         f"science-fair event, a ceremony, minor award or routine press release; "
         f"individual crime (cyber-fraud, phishing, scam or hacking arrests); consumer "
@@ -448,17 +461,40 @@ def _score_prompt(country_disp):
         f"culture, food, entertainment or human interest; general politics, diplomacy "
         f"or military news with no concrete science/technology substance; or an "
         f"opinion piece, interview or propaganda. The topic must be what the article "
-        f"is ACTUALLY about — a passing mention does not count. Only if the item is "
-        f"clearly ON-TOPIC, rate its STRATEGIC importance to {country_disp} on an "
-        f"integer scale 0..100 (0=trivial/local, 100=major national strategic "
-        f"significance). Judge by content, not language. Return ONLY a JSON object "
-        f"mapping each item id to its integer score, e.g. "
-        f'{{"1": 80, "2": 15}}. No prose, no markdown.')
+        f"is ACTUALLY about — a passing mention does not count. "
+        f"Judge by content, not language. This is a yes/no relevance decision only "
+        f"— do NOT rank, grade or score importance. Return ONLY a JSON object "
+        f"mapping each item id to true (on-topic) or false, e.g. "
+        f'{{"1": true, "2": false}}. No prose, no markdown.')
+
+
+_YES = {"true", "yes", "y", "on-topic", "ontopic", "relevant", "да"}
+_NO = {"false", "no", "n", "off-topic", "offtopic", "irrelevant", "нет"}
+
+
+def _verdict(v):
+    """Ответ модели по одному пункту -> RELEVANT_SCORE / 0 / None (не разобрано).
+
+    Промпт просит true/false, но в ротации десяток провайдеров и отвечают они
+    кто чем: булевым, строкой "yes", числом. Число разбирается по прежней
+    шкале 0..100 — модели, продолжающие грейдить, не должны терять весь батч.
+    """
+    if isinstance(v, bool):
+        return settings.RELEVANT_SCORE if v else 0
+    s = str(v).strip().strip('."\'').lower()
+    if s in _YES:
+        return settings.RELEVANT_SCORE
+    if s in _NO:
+        return 0
+    try:
+        return settings.RELEVANT_SCORE if float(s) > settings.RELEVANCE_CUTOFF else 0
+    except ValueError:
+        return None
 
 
 def _parse_scores(content, n):
-    """Ответ модели -> {id: оценка}. Возвращает ТОЛЬКО те id, по которым
-    модель реально высказалась: пропущенные не подставляются нулём (это
+    """Ответ модели -> {id: 0 | RELEVANT_SCORE}. Возвращает ТОЛЬКО те id, по
+    которым модель реально высказалась: пропущенные не подставляются нулём (это
     молча помечало бы статью отклонённой, хотя её никто не судил).
 
     Разбор через raw_decode, а не `re.search(r"{.*}")`: жадная регулярка при
@@ -481,11 +517,12 @@ def _parse_scores(content, n):
     out = {}
     for k, v in (obj.items() if isinstance(obj, dict) else []):
         try:
-            i, s = int(k), int(v)
+            i = int(k)
         except (TypeError, ValueError):
             continue
-        if 1 <= i <= n:
-            out[i] = max(0, min(100, s))
+        s = _verdict(v)
+        if s is not None and 1 <= i <= n:
+            out[i] = s
     return out
 
 

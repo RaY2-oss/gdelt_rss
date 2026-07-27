@@ -141,6 +141,71 @@ def blend(lex, cov, ent, w_lex, w_cov, w_ent):
             + w_ent * np.asarray(ent, dtype=np.float64)) / total
 
 
+def body_emb(body_blob, title_blob):
+    """Эмбеддинг ТЕЛА статьи; пока не досчитан — откат на заголовочный.
+
+    Откат нужен на переходный период (см. pipeline.embed_bodies): у статей,
+    собранных до появления колонки, тела ещё нет, и ронять из-за этого расчёт
+    важности незачем.
+    """
+    return np.frombuffer(body_blob or title_blob, np.float32)
+
+
+def structural(body_embs, urls, entity_cells, ent_df, fresh=None):
+    """Важность сюжетов ОДНОЙ страны в [0,1] — свёртка трёх факторов выше.
+
+    Единственная точка, где считается важность: её зовут и дайджест, и фид
+    «все статьи», и витрина. Раньше формула жила только в дайджесте, а фид с
+    витриной ранжировали по оценке LLM — то есть по гейту релевантности,
+    который для ранжирования не годится (см. шапку модуля).
+
+    body_embs    — эмбеддинг ТЕЛА представителя каждого сюжета, (n, dim)
+    urls         — urls[i]: url всех статей сюжета i (охват считается по ним)
+    entity_cells — entity_cells[i]: ячейки entities всех статей сюжета i
+    ent_df       — док-частота субъектов по окну этой страны (entities.document_freq);
+                   пустая/незначимая -> фактор субъектов выключается сам
+    fresh        — ключ свежести сюжета для отсечки LEXRANK_MAX_NODES
+                   (граф строится по самым свежим); None -> порядок как есть
+
+    Веса берутся из settings.IMPORTANCE_W_*, любой в 0 выключает фактор.
+    """
+    import entities
+    import settings
+
+    n = len(urls)
+    if n == 0:
+        return np.zeros(0, dtype=np.float64)
+
+    # LexRank требует плотную матрицу n*n. Сверх лимита берём самые свежие
+    # сюжеты: граф остаётся представительным, а память и время — ограниченными.
+    order = sorted(range(n), key=lambda i: (fresh[i] if fresh else 0) or "", reverse=True)
+    idx = sorted(order[:settings.LEXRANK_MAX_NODES])
+    lex = np.zeros(n, dtype=np.float64)
+    if idx:
+        sub = lexrank(np.vstack([body_embs[i] for i in idx]),
+                      settings.LEXRANK_DAMPING, settings.LEXRANK_MAX_ITER,
+                      settings.LEXRANK_TOL,
+                      domains=[domain(urls[i][0]) if urls[i] else "" for i in idx])
+        lex[idx] = minmax(sub)
+
+    cov = np.array([coverage_weight(distinct_domains(u), settings.COVERAGE_FULL_AT)
+                    for u in urls], dtype=np.float64)
+
+    # Словарь заметных субъектов самонастраивается по окну страны. Пока порога
+    # не перешагнул никто, фактор выключается целиком — иначе он равномерно
+    # опустил бы всю малую страну.
+    if ent_df and any(v >= settings.ENTITY_MIN_DF for v in ent_df.values()):
+        ent = np.array([max((entities.weight(
+            entities.prominent(cell, ent_df, settings.ENTITY_MIN_DF),
+            settings.ENTITY_FULL_AT) for cell in cells), default=0.0)
+            for cells in entity_cells], dtype=np.float64)
+    else:
+        ent = np.zeros(n, dtype=np.float64)
+
+    return blend(lex, cov, ent, settings.IMPORTANCE_W_LEXRANK,
+                 settings.IMPORTANCE_W_COVERAGE, settings.IMPORTANCE_W_ENTITY)
+
+
 def _selfcheck():
     assert domain("https://www.example.com/a/b?x=1") == "example.com"
     assert domain("http://m.gazeta.ru/news") == "gazeta.ru"

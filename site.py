@@ -6,12 +6,12 @@
 после часового прогона (run_score.sh) генерируется HTML в SITE_OUT, дальше
 всё делает nginx.
 
-Отбор и дедуп НЕ дублируют логику фида, а переиспользуют её: та же
-`feeds._cluster` (e5-косинус + лексический мостик), то же окно
-`WINDOW_HOURS`, тот же порог `RELEVANCE_CUTOFF`. Разница ровно одна: фид
-отдаёт представителя сюжета, а сайту нужен ещё и размер кластера (сколько
-изданий подхватило сюжет) — поэтому `stories` держит членов кластера, а не
-только победителя.
+Отбор, дедуп и ранжирование НЕ дублируют логику фида, а переиспользуют её
+целиком: `feeds.cluster_rows` (e5-косинус + лексический мостик) и `feeds.rank`
+(структурная важность), то же окно `WINDOW_HOURS`, тот же порог
+`RELEVANCE_CUTOFF`. Разница ровно одна: фид отдаёт представителя сюжета, а
+сайту нужен ещё и размер кластера (сколько изданий подхватило сюжет) —
+поэтому `stories` держит членов кластера, а не только победителя.
 
 В БД сборка пишет ровно одно: переводы своих представителей кластеров, в тот
 же кэш `articles.title_en/text_en`, которым пользуются фид и дайджест.
@@ -25,14 +25,14 @@ import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
-import numpy as np
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 import db
 import settings
 import translate
 import importance as imp
-from feeds import _cluster, _pubdate, _TOKEN_RE
+import feeds
+from feeds import _pubdate
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_DIR = os.path.join(BASE_DIR, "site_templates")
@@ -149,6 +149,14 @@ TRANSLATE_BUDGET = 12
 TRANSLATE_BUDGET_S = 120
 _translate_until = 0.0
 
+# Граница переключателя «Всё / Только важное» на шкале структурной важности
+# (0-100). Не порог отбора: в ленте лежит всё, что прошло гейт релевантности,
+# это фильтр на клиенте. Прежде тут стоял MIN_IMPORTANCE — порог по оценке
+# LLM, которой больше нет.
+# 50 по замеру распределения: медиана шкалы 38, порог 40 оставлял бы почти
+# половину ленты, 50 оставляет верхние ~19 %.
+IMPORTANT_AT = 50
+
 
 def _readable(row):
     """Заголовок уже читается: перевод лежит в кэше или язык оригинала такой,
@@ -250,54 +258,46 @@ def window_rows(conn, country, hours):
     """Те же колонки и тот же порог, что у `feeds.build_country`."""
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     return conn.execute(
-        "SELECT url,title,text,publish_date,fetched_at,importance,embedding,"
-        "language,title_en,text_en,entities FROM articles "
-        "WHERE country=? AND importance>? AND fetched_at>=? ORDER BY importance DESC",
+        feeds._SELECT + "WHERE country=? AND importance>? AND fetched_at>=?",
         (country, settings.RELEVANCE_CUTOFF, since)).fetchall()
 
 
 def stories(conn, rows, country, now):
-    """rows → сюжеты, отсортированные как в фиде (важность, затем охват).
+    """rows → сюжеты в том же порядке, что в фиде (структурная важность).
 
-    Кластеризация та же, что в `feeds._top_items`, но члены кластера здесь не
-    выбрасываются: число разных изданий по сюжету — это то, чего в фиде не
-    видно, и ровно оно отличает национальную новость от единичной заметки.
+    Кластеризация и ранжирование берутся у фида целиком (feeds.cluster_rows /
+    feeds.rank), но члены кластера здесь не выбрасываются: число разных
+    изданий по сюжету — это то, чего в фиде не видно, и ровно оно отличает
+    национальную новость от единичной заметки.
     """
     if not rows:
         return []
-    embs = [np.frombuffer(r[6], np.float32) for r in rows]
-    titles = [r[8] or r[1] for r in rows]
-    exclude = _TOKEN_RE.split(settings.country_display(country).lower())
-    labels = _cluster(embs, settings.DEDUP_COSINE, titles=titles, exclude=exclude)
+    groups = feeds.cluster_rows(rows, country)
+    ranked = feeds.rank(groups)
 
-    groups = {}
-    for row, lab in zip(rows, labels):
-        groups.setdefault(int(lab), []).append(row)
-
-    # Представителя фид берёт по максимуму важности (feeds._top_items), и тут
-    # ключ тот же — но первым разрядом идёт читаемость. Разбиение у сайта и
-    # фида расходится (_cluster мостит кросс-языковые дубли по title_en, а к
-    # сборке сайта фид уже дописал часть переводов), поэтому головой кластера
-    # регулярно оказывалась статья, которую никто не переводил.
+    # Представитель — читаемый (перевод есть или язык en/ru), при прочих равных
+    # самый свежий: тем же ключом свежести, что в feeds._top_items, чтобы фид и
+    # витрина вели на один и тот же источник сюжета.
     #
     # Члены кластера — один и тот же сюжет (косинус >= DEDUP_COSINE), так что
-    # показать вместо неё переведённого соседа не стоит ни одного обращения к
-    # переводчику. Сортировка целиком, а не max(): sources ниже должны
-    # начинаться с того же издания, на которое ведёт заголовок.
+    # показать вместо непереведённой головы переведённого соседа не стоит ни
+    # одного обращения к переводчику. Сортировка целиком, а не max(): sources
+    # ниже должны начинаться с того же издания, на которое ведёт заголовок.
     for members in groups.values():
-        members.sort(key=lambda r: (_readable(r), r[5] or 0), reverse=True)
+        members.sort(key=lambda r: (_readable(r), r[4] or ""), reverse=True)
 
-    # Что соседом не закрылось — переводим сами, в общий с фидом кэш, сверху по
-    # важности и в пределах бюджета (см. TRANSLATE_BUDGET).
-    todo = sorted((m[0] for m in groups.values() if not _readable(m[0])),
-                  key=lambda r: (r[5] or 0), reverse=True)[:TRANSLATE_BUDGET] \
+    # Что соседом не закрылось — переводим сами, в общий с фидом кэш. ranked уже
+    # по убыванию важности, так что бюджет тратится сверху вниз.
+    todo = [groups[lab][0] for lab, _w in ranked
+            if not _readable(groups[lab][0])][:TRANSLATE_BUDGET] \
         if time.monotonic() < _translate_until else []
     en = translate.translate_missing(
         conn, [(r[0], r[1], r[2], r[7], r[8], r[9]) for r in todo])
 
     out = []
-    for members in groups.values():
-        url, title, text, pdate, fetched, score, _e, lang, t_en, x_en, ents = members[0]
+    for lab, weight in ranked:
+        members = groups[lab]
+        url, title, text, pdate, fetched, _llm, _e, lang, t_en, x_en, _be, ents = members[0]
         t_en, x_en = en.get(url, (t_en, x_en))
         sources, seen_domains = [], set()
         for m in members:
@@ -306,7 +306,9 @@ def stories(conn, rows, country, now):
                 seen_domains.add(d)
                 sources.append({"domain": d, "url": m[0]})
         dt = _pubdate(pdate, fetched)
-        score = score or 0
+        # Структурная важность приходит в [0,1] (importance.structural); шкала
+        # 0-100 — только для показа, столбик и ступень тона считают по ней.
+        score = round(weight * 100)
         head = sources[0]["domain"] if sources else ""
         clean = _clean_title(t_en or title, head) or url
         out.append({
@@ -332,9 +334,7 @@ def stories(conn, rows, country, now):
             "country": country,
             "country_ru": RU_COUNTRY.get(country, settings.country_display(country)),
         })
-    cov = {s["url"]: imp.coverage_weight(s["outlets"], settings.COVERAGE_FULL_AT)
-           for s in out}
-    out.sort(key=lambda s: (s["score"], cov[s["url"]]), reverse=True)
+    # Порядок уже задан ranked — пересортировывать нечем и незачем.
     return out
 
 
@@ -393,7 +393,7 @@ def _env():
     env.filters["tier"] = _tier
     # именно global, а не переменная рендера: макросы в _story.html
     # импортируются без `with context` и переменных страницы не видят
-    env.globals["min_importance"] = settings.MIN_IMPORTANCE
+    env.globals["important_at"] = IMPORTANT_AT
     return env
 
 

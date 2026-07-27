@@ -65,14 +65,14 @@
 {% endmacro %}
 
 
-{# То же деление, что у двух фидов страны: «всё» — граница приёма
-   (RELEVANCE_CUTOFF), «важное» — порог дайджеста (MIN_IMPORTANCE). Считается
-   на клиенте по data-score, потому что обе выборки уже на странице. #}
+{# В ленте лежит всё, что прошло гейт релевантности; «важное» — верх шкалы
+   структурной важности (site.IMPORTANT_AT). Считается на клиенте по
+   data-score, потому что вся выборка уже на странице. #}
 {% macro filter(placeholder='Фильтр по ленте') %}
 <form class="filter" role="search" onsubmit="return false">
   <div class="views" role="group" aria-label="Что показывать">
     <button class="views__btn is-on" type="button" data-view="0">Всё</button>
-    <button class="views__btn" type="button" data-view="{{ min_importance }}">Только важное</button>
+    <button class="views__btn" type="button" data-view="{{ important_at }}">Только важное</button>
   </div>
   <label class="filter__label" for="q">Фильтр</label>
   <input class="filter__input" id="q" type="search" placeholder="{{ placeholder }}"

@@ -3,11 +3,17 @@
 
 На страну: статьи за WINDOW_HOURS с importance>RELEVANCE_CUTOFF (то есть
 вердикт LLM был accepted — см. pipeline.score), e5-косинусная кластеризация
-дублей (один сюжет, разные издания/языки — берём представителя с наибольшей
-важностью), сортировка по важности, без верхнего лимита (это фид «все
-статьи» — отбор по важности с MMR/TOP_N делает digest.py для дневного
-«важные статьи»-фида). Запись {country}.xml в OUTPUT_DIR (его отдаёт nginx
-rss_proxy для FreshRSS).
+дублей (один сюжет, разные издания/языки — берём самого свежего
+представителя), сортировка по СТРУКТУРНОЙ важности (importance.structural:
+LexRank по эмбеддингам тел + охват по доменам + вес субъектов), без верхнего
+лимита (это фид «все статьи» — отбор с MMR/TOP_N делает digest.py для
+дневного «важные статьи»-фида). Запись {country}.xml в OUTPUT_DIR (его отдаёт
+nginx rss_proxy для FreshRSS).
+
+По оценке LLM здесь НЕ ранжируют: она двоичная, «по теме или нет», и порядка
+не задаёт. Граф считается заново на каждый прогон — на всех 89 странах это
+1.6 с (замер 27.07: Китай, самый крупный, 1055 статей и 356 сюжетов — 0.47 с),
+поэтому инкрементального обновления матрицы нет и не нужно.
 
 Модель e5 здесь НЕ грузится: эмбеддинги уже лежат в БД blob'ом. Каждая страна
 обрабатывается по очереди — пик RAM держится на размере одной страны.
@@ -23,10 +29,16 @@ from feedgen.feed import FeedGenerator
 
 import settings
 import db
+import entities
 import importance as imp
 import translate
 
 log = logging.getLogger("gdelt_rss")
+
+# Общая форма строки для фида, витрины и дайджеста — индексы совпадают во
+# всех трёх, иначе r[10]/r[11] означали бы в каждом своё.
+_SELECT = ("SELECT url,title,text,publish_date,fetched_at,importance,embedding,"
+           "language,title_en,text_en,embedding_body,entities FROM articles ")
 
 _TOKEN_RE = re.compile(r"[^\w]+")
 _TOKEN_MIN_LEN = 4
@@ -152,12 +164,12 @@ def _pubdate(publish_date, fetched_at):
     return pd or fa or datetime.now(timezone.utc)
 
 
-def _top_items(rows, country):
-    """rows: (url,title,text,publish_date,fetched_at,importance,embedding,
-    language,title_en,text_en). -> все отобранные после дедупа, по убыванию
-    важности (без TOP_N/MMR-лимита — это фид «все статьи»)."""
-    if not rows:
-        return []
+def cluster_rows(rows, country):
+    """rows (12 колонок, см. _SELECT) -> {label: [строки сюжета]}.
+
+    Общая для фида и витрины часть: одна и та же кластеризация должна давать
+    одно и то же разбиение, иначе они показывают разные представители сюжета.
+    """
     embs = [np.frombuffer(r[6], np.float32) for r in rows]
     # title_en, если уже закэширован с прошлого прогона (см. translate.py) —
     # мостит кросс-языковые дубли, которых сырой заголовок мостить не может
@@ -165,32 +177,51 @@ def _top_items(rows, country):
     titles = [r[8] or r[1] for r in rows]
     exclude = _TOKEN_RE.split(settings.country_display(country).lower())
     labels = _cluster(embs, settings.DEDUP_COSINE, titles=titles, exclude=exclude)
-    best, urls = {}, {}
-    for row, emb, lab in zip(rows, embs, labels):
-        lab = int(lab)
-        urls.setdefault(lab, []).append(row[0])
-        if lab not in best or (row[5] or 0) > (best[lab][0][5] or 0):
-            best[lab] = (row, emb)
-    # Оценка LLM квантована (96 % значений кратны 5), поэтому одной ею сортировать
-    # нельзя: в окне крупной страны сотни статей делят одно число и порядок внутри
-    # связки произволен. Второй ключ — охват сюжета по РАЗНЫМ доменам. Полный
-    # LexRank здесь не считается намеренно: это фид «все статьи» без TOP_N-отсечки,
-    # ранжирование в нём косметическое, а стоимость графа — ежечасная на 89 стран.
-    cov = {lab: imp.coverage_weight(imp.distinct_domains(u), settings.COVERAGE_FULL_AT)
-           for lab, u in urls.items()}
-    picked = sorted(best.items(),
-                    key=lambda kv: ((kv[1][0][5] or 0), cov[kv[0]]), reverse=True)
-    return [row for _lab, (row, _emb) in picked]
+    groups = {}
+    for row, lab in zip(rows, labels):
+        groups.setdefault(int(lab), []).append(row)
+    return groups
+
+
+def rank(groups):
+    """{label: [строки]} -> [(label, важность)] по убыванию.
+
+    Важность структурная (importance.structural): LexRank по эмбеддингам тел +
+    охват по доменам + вес субъектов. Оценкой LLM здесь не ранжируют — она
+    двоичная, «по теме или нет», и порядка не задаёт вовсе.
+    """
+    labels = list(groups)
+    if not labels:
+        return []
+    reps = [max(groups[lab], key=lambda r: r[4] or "") for lab in labels]
+    ent_df = entities.document_freq(r[11] for lab in labels for r in groups[lab])
+    scores = imp.structural(
+        [imp.body_emb(r[10], r[6]) for r in reps],
+        [[r[0] for r in groups[lab]] for lab in labels],
+        [[r[11] or "" for r in groups[lab]] for lab in labels],
+        ent_df,
+        fresh=[r[4] for r in reps])
+    return sorted(zip(labels, scores), key=lambda kv: kv[1], reverse=True)
+
+
+def _top_items(rows, country):
+    """-> представители сюжетов по убыванию структурной важности (без
+    TOP_N/MMR-лимита — это фид «все статьи»)."""
+    if not rows:
+        return []
+    groups = cluster_rows(rows, country)
+    # Представитель — самый важный по оценке… которой больше нет. Берём самый
+    # свежий: внутри кластера это один и тот же сюжет (косинус >= DEDUP_COSINE).
+    return [max(groups[lab], key=lambda r: r[4] or "") for lab, _s in rank(groups)]
 
 
 def build_country(conn, country):
     since = (datetime.now(timezone.utc) - timedelta(hours=settings.WINDOW_HOURS)).isoformat()
-    # RELEVANCE_CUTOFF, не MIN_IMPORTANCE: это фид «все статьи» — граница та
-    # же, что и вердикт accepted/rejected в pipeline.score (importance>CUTOFF).
+    # Порог один — граница приёма: вердикт accepted/rejected из pipeline.score.
+    # Отдельного порога важности нет, важность считается графом (см. rank).
     rows = conn.execute(
-        "SELECT url,title,text,publish_date,fetched_at,importance,embedding,language,title_en,text_en "
-        "FROM articles WHERE country=? AND importance>? AND fetched_at>=? "
-        "ORDER BY importance DESC", (country, settings.RELEVANCE_CUTOFF, since)).fetchall()
+        _SELECT + "WHERE country=? AND importance>? AND fetched_at>=?",
+        (country, settings.RELEVANCE_CUTOFF, since)).fetchall()
     items = _top_items(rows, country)
     # переводим всё, что попало в фид (после дедупа, без лимита) — не весь
     # оценённый бэклог, см. translate.py.
@@ -203,7 +234,8 @@ def build_country(conn, country):
     fg.link(href=f"https://data.gdeltproject.org/", rel="alternate")
     fg.description(f"Наука и технологии: {disp}. Все статьи за сутки по важности (GDELT GKG).")
     fg.language("mul")
-    for url, title, text, pdate, fa, imp, _emb, _lang, _t_en, _x_en in items:
+    for row in items:
+        url, title, text, pdate, fa = row[0], row[1], row[2], row[3], row[4]
         t_en, x_en = translated.get(url, (None, None))
         fe = fg.add_entry()
         fe.id(url)

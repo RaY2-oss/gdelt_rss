@@ -48,17 +48,6 @@ def _row_date(row):
     return _pubdate(row[3], row[4]).date().isoformat()
 
 
-def _body_emb(row):
-    """Эмбеддинг ТЕЛА статьи; пока не досчитан — откат на заголовочный.
-
-    Откат нужен только на переходный период (см. pipeline.embed_bodies):
-    у статей, собранных до появления колонки, тела ещё нет, и ронять из-за
-    этого дайджест незачем.
-    """
-    blob = row[10] if len(row) > 10 and row[10] else row[6]
-    return np.frombuffer(blob, np.float32)
-
-
 def _cluster_importance(clusters, ent_df):
     """Непрерывная структурная важность сюжетов страны, БЕЗ участия LLM.
 
@@ -76,35 +65,15 @@ def _cluster_importance(clusters, ent_df):
     -> {label: важность в [0,1]}
     """
     labels = list(clusters)
-    reps = [max(clusters[lab], key=lambda r: r[5] or 0) for lab in labels]
-
     # LexRank считается по сюжетам, а не по статьям: размер кластера уже учтён
     # отдельным фактором охвата, и учитывать его дважды нельзя.
-    order = sorted(range(len(labels)), key=lambda i: reps[i][4] or "", reverse=True)
-    keep = set(order[:settings.LEXRANK_MAX_NODES])
-    lex = np.zeros(len(labels), dtype=np.float64)
-    idx = [i for i in range(len(labels)) if i in keep]
-    if idx:
-        sub = imp.lexrank(np.vstack([_body_emb(reps[i]) for i in idx]),
-                          settings.LEXRANK_DAMPING, settings.LEXRANK_MAX_ITER,
-                          settings.LEXRANK_TOL,
-                          domains=[imp.domain(reps[i][0]) for i in idx])
-        lex[idx] = imp.minmax(sub)
-
-    cov = np.array([imp.coverage_weight(imp.distinct_domains(r[0] for r in clusters[lab]),
-                                        settings.COVERAGE_FULL_AT)
-                    for lab in labels], dtype=np.float64)
-
-    if ent_df:
-        ent = np.array([max(entities.weight(
-            entities.prominent(r[11] if len(r) > 11 else "", ent_df,
-                               settings.ENTITY_MIN_DF), settings.ENTITY_FULL_AT)
-            for r in clusters[lab]) for lab in labels], dtype=np.float64)
-    else:
-        ent = np.zeros(len(labels), dtype=np.float64)
-
-    blended = imp.blend(lex, cov, ent, settings.IMPORTANCE_W_LEXRANK,
-                        settings.IMPORTANCE_W_COVERAGE, settings.IMPORTANCE_W_ENTITY)
+    reps = [max(clusters[lab], key=lambda r: r[5] or 0) for lab in labels]
+    blended = imp.structural(
+        [imp.body_emb(r[10] if len(r) > 10 else None, r[6]) for r in reps],
+        [[r[0] for r in clusters[lab]] for lab in labels],
+        [[r[11] if len(r) > 11 else "" for r in clusters[lab]] for lab in labels],
+        ent_df,
+        fresh=[r[4] for r in reps])
     return dict(zip(labels, blended))
 
 
@@ -116,8 +85,12 @@ def build_country_digest(conn, country, day=None):
     rows = conn.execute(
         "SELECT url,title,text,publish_date,fetched_at,importance,embedding,"
         "language,title_en,text_en,embedding_body,entities "
-        "FROM articles WHERE country=? AND importance>=? AND fetched_at>=?",
-        (country, settings.MIN_IMPORTANCE, graph_since)).fetchall()
+        # Граница приёма, а не отдельный порог важности: LLM решает только «по
+        # теме или нет», отбор в дайджест делают TOP_N и MMR по структурной
+        # важности. Прежний MIN_IMPORTANCE=40 резал по квантованной оценке и
+        # выбрасывал сюжеты ещё до того, как граф успевал их взвесить.
+        "FROM articles WHERE country=? AND importance>? AND fetched_at>=?",
+        (country, settings.RELEVANCE_CUTOFF, graph_since)).fetchall()
     if not rows:
         _write_feed(country, day_str, [], {})
         return 0

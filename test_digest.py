@@ -91,7 +91,7 @@ def test_only_todays_articles_are_candidates():
     conn = db.connect()
     v = _v(1)
     # сюжет: статья вчера + статья сегодня по тому же сюжету (importance выше
-    # settings.MIN_IMPORTANCE, иначе фильтр build_country_digest их не видит)
+    # RELEVANCE_CUTOFF, иначе фильтр build_country_digest их не видит)
     conn.execute("INSERT INTO articles (url,country,fetched_at,publish_date,title,text,"
                  "language,title_hash,embedding,importance) VALUES (?,?,?,?,?,?,?,?,?,?)",
                  ("http://x/y", "india", NOW, YDAY, "old", "body", "en", "h1",

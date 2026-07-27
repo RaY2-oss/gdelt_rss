@@ -16,13 +16,19 @@ from datetime import datetime, timezone
 
 
 def test_parse_scores():
-    assert pipeline._parse_scores('{"1": 80, "2": 15}', 2) == {1: 80, 2: 15}
-    assert pipeline._parse_scores('```json\n{"1": 999, "2": -5}\n```', 2) == {1: 100, 2: 0}
-    assert pipeline._parse_scores('junk {"1": 50} tail', 3) == {1: 50}       # id вне диапазона отсекается
-    assert pipeline._parse_scores('{"1": 10, "9": 90}', 3) == {1: 10}
+    YES, NO = settings.RELEVANT_SCORE, 0
+    # Промптом просим true/false, но в ротации десяток провайдеров
+    assert pipeline._parse_scores('{"1": true, "2": false}', 2) == {1: YES, 2: NO}
+    assert pipeline._parse_scores('```json\n{"1": "yes", "2": "NO"}\n```', 2) == {1: YES, 2: NO}
+    # число — прежняя шкала 0..100: модель, продолжающая грейдить, не теряет батч
+    assert pipeline._parse_scores('{"1": 80, "2": 3}', 2) == {1: YES, 2: NO}
+    assert pipeline._parse_scores('junk {"1": true} tail', 3) == {1: YES}    # id вне диапазона отсекается
+    assert pipeline._parse_scores('{"1": true, "9": true}', 3) == {1: YES}
+    # неразобранное значение не выдаётся за отказ — статью никто не судил
+    assert pipeline._parse_scores('{"1": "maybe", "2": false}', 2) == {2: NO}
     # «Extra data»: два склеенных объекта — раньше это роняло весь батч
-    assert pipeline._parse_scores('{"1": 40}{"2": 50}', 2) == {1: 40}
-    assert pipeline._parse_scores('Here you go:\n{"1": 40}\nDone.', 2) == {1: 40}
+    assert pipeline._parse_scores('{"1": true}{"2": true}', 2) == {1: YES}
+    assert pipeline._parse_scores('Here you go:\n{"1": true}\nDone.', 2) == {1: YES}
 
 
 def test_title_hash():
@@ -72,7 +78,7 @@ def test_score_gate_drops_confident_rejects_without_llm():
 
     def fake_openrouter(system, user, ref_url=None):
         calls.append(user)
-        return json.dumps({"1": 80})
+        return json.dumps({"1": True})
 
     def fake_verdicts(path, embeddings, texts):
         # items идут в порядке rows (fetched_at DESC): keep первым, drop вторым
@@ -90,7 +96,7 @@ def test_score_gate_drops_confident_rejects_without_llm():
     row = lambda u: conn.execute(
         "SELECT importance, scored_by FROM articles WHERE url=?", (u,)).fetchone()
     assert row("http://prefland/drop") == (0, "gate")
-    assert row("http://prefland/keep") == (80, "llm")
+    assert row("http://prefland/keep") == (settings.RELEVANT_SCORE, "llm")
 
     v = conn.execute("SELECT verdict, embedding FROM seen_urls WHERE url=?",
                      ("http://prefland/drop",)).fetchone()
@@ -100,9 +106,9 @@ def test_score_gate_drops_confident_rejects_without_llm():
 
 def test_score_gate_accepts_without_llm():
     """Верхний порог: уверенный приём не покупается у LLM. Статья получает
-    PREFILTER_ACCEPT_SCORE — этого хватает, чтобы пройти MIN_IMPORTANCE и
-    попасть в кандидаты дайджеста, где порядок задаёт уже структурная
-    важность (importance.py), а не это число."""
+    PREFILTER_ACCEPT_SCORE — ту же отметку «принята», что и у решения LLM;
+    порядок задаёт структурная важность (importance.structural), а не это
+    число."""
     from unittest.mock import patch
 
     db.init()
@@ -125,7 +131,7 @@ def test_score_gate_accepts_without_llm():
         "SELECT DISTINCT verdict FROM seen_urls WHERE url LIKE 'http://acceptland/%'")}
     conn.close()
     assert set(got.values()) == {settings.PREFILTER_ACCEPT_SCORE}, got
-    assert got["http://acceptland/keep"] >= settings.MIN_IMPORTANCE
+    assert got["http://acceptland/keep"] > settings.RELEVANCE_CUTOFF
     assert sb == {"gate"}, "локальное решение не должно попасть в обучающую выборку"
     assert verdicts == {"accepted"}
 
@@ -168,13 +174,13 @@ def test_missing_ids_stay_unscored_instead_of_being_rejected():
 
     with patch.object(pipeline.prefilter, "is_ready", return_value=False), \
          patch.object(pipeline, "_call_openrouter_raw",
-                      side_effect=lambda *a, **k: json.dumps({"1": 90})):
+                      side_effect=lambda *a, **k: json.dumps({"1": True})):
         pipeline.score()
 
     got = dict(conn.execute("SELECT url, importance FROM articles WHERE country='partial'"))
     conn.close()
     scored = [v for v in got.values() if v is not None]
-    assert len(scored) == 1 and scored[0] == 90, got
+    assert len(scored) == 1 and scored[0] == settings.RELEVANT_SCORE, got
     assert None in got.values(), "пропущенный моделью id обязан остаться NULL"
 
 
@@ -222,23 +228,38 @@ def test_score_propagates_verdict_to_duplicate_group_in_seen_urls():
     assert verdicts["http://d/3"] == "rejected"
 
 
-def test_cluster_dedups_and_sorts_by_importance():
-    # два одинаковых вектора (дубль) + два разных → 3 кластера; дубль схлопнут.
-    v_dup = np.ones(settings.EMBEDDING_DIM, np.float32)
+def _feed_row(url, title, vec, fetched, entities_cell=""):
+    """Строка в форме feeds._SELECT (12 колонок)."""
+    return (url, title, "t", None, fetched, settings.RELEVANT_SCORE, vec.tobytes(),
+            "en", None, None, None, entities_cell)
+
+
+def test_cluster_dedups_and_ranks_by_coverage():
+    """Дедуп + порядок по СТРУКТУРНОЙ важности.
+
+    Оценка LLM теперь двоичная и порядка не задаёт вовсе, поэтому проверяем
+    фактор охвата: сюжет, о котором написали три разных издания, обязан стоять
+    выше одиночной заметки. Векторы взаимно ортогональны — LexRank у всех
+    сюжетов одинаков, и решает именно охват.
+    """
+    v_dup = np.zeros(settings.EMBEDDING_DIM, np.float32); v_dup[2] = 1
     v_b = np.zeros(settings.EMBEDDING_DIM, np.float32); v_b[0] = 1
     v_c = np.zeros(settings.EMBEDDING_DIM, np.float32); v_c[1] = 1
-    now = datetime.now(timezone.utc).isoformat()
     rows = [
-        ("u1", "dup low",  "t", None, now, 10, v_dup.tobytes(), "en", None, None),
-        ("u2", "dup high", "t", None, now, 90, v_dup.tobytes(), "en", None, None),
-        ("u3", "b",        "t", None, now, 50, v_b.tobytes(), "en", None, None),
-        ("u4", "c",        "t", None, now, 40, v_c.tobytes(), "en", None, None),
+        _feed_row("http://a.com/1", "dup old",  v_dup, "2026-07-20T10:00:00"),
+        _feed_row("http://a.com/2", "dup new",  v_dup, "2026-07-20T12:00:00"),
+        _feed_row("http://b1.com/x", "wide",    v_b, "2026-07-20T11:00:00"),
+        _feed_row("http://b2.com/x", "wide",    v_b, "2026-07-20T11:00:00"),
+        _feed_row("http://b3.com/x", "wide",    v_b, "2026-07-20T11:00:00"),
+        _feed_row("http://c.com/x", "narrow",   v_c, "2026-07-20T11:00:00"),
     ]
     top = feeds._top_items(rows, "india")
     urls = [r[0] for r in top]
-    assert "u2" in urls and "u1" not in urls, "дубль: должен остаться более важный"
-    assert len(top) == 3, "все статьи после дедупа, без лимита"
-    assert [r[5] for r in top] == [90, 50, 40], "сортировка по важности"
+    assert len(top) == 3, f"три сюжета после дедупа, без лимита: {urls}"
+    assert "http://a.com/2" in urls and "http://a.com/1" not in urls, \
+        "внутри кластера остаётся самая свежая статья"
+    assert urls.index("http://b1.com/x") < urls.index("http://c.com/x"), \
+        "сюжет с тремя изданиями должен стоять выше одиночного"
 
 
 def _vec_at_cosine(cos, dim=settings.EMBEDDING_DIM, seed=0):
