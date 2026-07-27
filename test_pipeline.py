@@ -326,6 +326,35 @@ def test_cluster_excludes_country_token_from_lexical_bridge():
     assert labels[0] != labels[1], "общие 'india'+'sparked' не должны в одиночку сливать разные сюжеты"
 
 
+def test_cluster_bodies_merge_what_titles_miss():
+    """Тела — второй сигнал по ИЛИ, а не замена заголовочному.
+
+    Прод-случай: «India's Rs 4.78 Lakh Crore Energy Storage Plan» и «47 GW
+    battery storage, 23 GW pumped storage projects in pipeline» — один
+    документ, косинус тел 0.958, заголовков 0.859.
+
+    Заодно регресс на смешивание пространств: у трети статей тела ещё не
+    досчитаны (bodies[i] is None). Их нулевой вектор обязан НЕ сливаться ни с
+    кем — иначе все статьи без тела схлопнулись бы в один сюжет."""
+    embs = [_vec_at_cosine(1.0, seed=1),      # заголовки далеко друг от друга
+            _vec_at_cosine(0.70, seed=1),
+            _vec_at_cosine(0.70, seed=2)]
+    same_body = _vec_at_cosine(1.0, seed=9)
+    bodies = [same_body, same_body, None]     # у третьей тело не досчитано
+
+    plain = feeds._cluster(embs, settings.DEDUP_COSINE)
+    assert plain[0] != plain[1], "предпосылка теста: по заголовкам это разные сюжеты"
+
+    labels = feeds._cluster(embs, settings.DEDUP_COSINE, bodies=bodies)
+    assert labels[0] == labels[1], "совпавшие тела обязаны слить сюжет"
+    assert labels[2] != labels[0], "статья без тела не должна липнуть к чужому сюжету"
+
+    # Две статьи БЕЗ тел: оба нулевых вектора дают косинус 0 и слиться не могут.
+    solo = feeds._cluster([_vec_at_cosine(1.0, seed=1), _vec_at_cosine(0.70, seed=2)],
+                          settings.DEDUP_COSINE, bodies=[None, None])
+    assert solo[0] != solo[1], "нулевые вектора не должны сливать статьи без тел"
+
+
 def test_build_country_writes_xml():
     db.init()
     conn = db.connect()

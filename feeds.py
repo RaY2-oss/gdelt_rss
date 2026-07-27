@@ -72,18 +72,34 @@ def _distinctive_tokens(titles, exclude=()):
     return [{t for t in toks if doc_freq[t] <= cutoff and t not in excl} for toks in tokensets]
 
 
-def _cluster(embs, threshold, titles=None, exclude=()):
+def _cluster(embs, threshold, titles=None, exclude=(), bodies=None):
     """Жадная кластеризация по косинусу, построчно (без матрицы n*n).
 
     titles (опц.): пары в [DEDUP_LEXICAL_FLOOR, threshold) — семантически
     близкие, но не обязательно один сюжет (см. DEDUP_LEXICAL_FLOOR) — мержим
     только если делят >= _MIN_SHARED_TOKENS "редких" для батча токена
-    заголовка. Косинус >= threshold мержится безусловно."""
+    заголовка. Косинус >= threshold мержится безусловно.
+
+    bodies (опц.): эмбеддинги ТЕЛ, None у тех, где тело ещё не досчитано.
+    Считаются ОТДЕЛЬНОЙ матрицей и объединяются по ИЛИ: тела ловят дубли,
+    которые заголовки роняют («India's Rs 4.78 Lakh Crore Energy Storage Plan»
+    и «47 GW battery storage, 23 GW pumped storage projects in pipeline» — один
+    документ, косинус тел 0.958, косинус заголовков 0.859). Смешивать вектора
+    заголовка и тела в ОДНОЙ матрице нельзя: это разные пространства, косинус
+    между ними ~0.8 даже у точного дубля, и дедуп разваливается — тела
+    досчитываются отдельной стадией, в суточном окне их пока 27 %. Строка без
+    тела получает нулевой вектор: её косинус ко всем 0, порога не достигает."""
     n = len(embs)
     if n == 0:
         return np.zeros(0, int)
-    E = np.asarray(embs, np.float32)
-    E = E / (np.linalg.norm(E, axis=1, keepdims=True) + 1e-10)
+
+    def unit(vecs):
+        E = np.asarray(vecs, np.float32)
+        return E / (np.linalg.norm(E, axis=1, keepdims=True) + 1e-10)
+
+    E = unit(embs)
+    B = unit([b if b is not None else np.zeros(E.shape[1], np.float32)
+              for b in bodies]) if bodies is not None else None
     lex = _distinctive_tokens(titles, exclude) if titles else None
     labels = np.full(n, -1, int)
     nxt = 0
@@ -92,6 +108,8 @@ def _cluster(embs, threshold, titles=None, exclude=()):
             continue
         sims = E @ E[i]
         match = sims >= threshold
+        if B is not None:
+            match = match | (B @ B[i] >= threshold)
         if lex is not None and lex[i]:
             floor_ok = sims >= settings.DEDUP_LEXICAL_FLOOR
             shared = np.array([len(lex[i] & lex[j]) >= _MIN_SHARED_TOKENS for j in range(n)])
@@ -171,12 +189,17 @@ def cluster_rows(rows, country):
     одно и то же разбиение, иначе они показывают разные представители сюжета.
     """
     embs = [np.frombuffer(r[6], np.float32) for r in rows]
+    # Тела — вторым сигналом, порог тот же: распределения косинусов почти
+    # совпадают (медиана 0.806 против 0.800, p99 0.874 против 0.879), а дубли
+    # тела ловят те, что заголовки роняют (см. _cluster).
+    bodies = [np.frombuffer(r[10], np.float32) if r[10] else None for r in rows]
     # title_en, если уже закэширован с прошлого прогона (см. translate.py) —
     # мостит кросс-языковые дубли, которых сырой заголовок мостить не может
     # (разные алфавиты не делят токенов); сходится за пару часовых прогонов.
     titles = [r[8] or r[1] for r in rows]
     exclude = _TOKEN_RE.split(settings.country_display(country).lower())
-    labels = _cluster(embs, settings.DEDUP_COSINE, titles=titles, exclude=exclude)
+    labels = _cluster(embs, settings.DEDUP_COSINE, titles=titles, exclude=exclude,
+                      bodies=bodies)
     groups = {}
     for row, lab in zip(rows, labels):
         groups.setdefault(int(lab), []).append(row)
@@ -199,8 +222,7 @@ def rank(groups):
         [imp.body_emb(r[10], r[6]) for r in reps],
         [[r[0] for r in groups[lab]] for lab in labels],
         [[r[11] or "" for r in groups[lab]] for lab in labels],
-        ent_df,
-        fresh=[r[4] for r in reps])
+        ent_df)
     return sorted(zip(labels, scores), key=lambda kv: kv[1], reverse=True)
 
 

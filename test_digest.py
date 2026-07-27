@@ -42,7 +42,7 @@ def _cluster_imp(clusters, ent_df):
         [imp.body_emb(r[10], r[6]) for r in reps],
         [[r[0] for r in clusters[lab]] for lab in labels],
         [[r[11] or "" for r in clusters[lab]] for lab in labels],
-        ent_df, fresh=[r[4] for r in reps])))
+        ent_df)))
 
 
 def test_coverage_counts_domains_not_articles():

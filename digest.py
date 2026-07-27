@@ -36,6 +36,7 @@ from feedgen.feed import FeedGenerator
 import settings
 import db
 import feeds
+import importance as imp
 import translate
 from feeds import _pubdate, _mmr_select, _max_cosine  # переиспользуем MMR и парсинг даты
 
@@ -69,8 +70,13 @@ def build_country_digest(conn, country, day=None):
     clusters = feeds.cluster_rows(rows, country)
     cluster_imp = dict(feeds.rank(clusters))
 
+    # Сравнивать с уже отправленным надо тем же эмбеддингом, каким считается
+    # представитель, иначе дедуп повторов слепнет. В digest_sent лежит тот, что
+    # был на момент отправки (мог быть заголовочным — тело досчитывается позже
+    # отдельной стадией), поэтому берём актуальное тело статьи, если она ещё в БД.
     sent_embs = [np.frombuffer(r[0], np.float32) for r in conn.execute(
-        "SELECT embedding FROM digest_sent WHERE country=?", (country,))]
+        "SELECT COALESCE(a.embedding_body, s.embedding) FROM digest_sent s "
+        "LEFT JOIN articles a ON a.url=s.url WHERE s.country=?", (country,))]
 
     candidates = []
     for lab, cluster_rows in clusters.items():
@@ -80,7 +86,7 @@ def build_country_digest(conn, country, day=None):
         # Внутри кластера это один сюжет, а оценка LLM теперь двоичная и
         # представителя не выбирает — берём самую свежую статью дня.
         rep = max(today_rows, key=lambda r: r[4] or "")
-        rep_emb = np.frombuffer(rep[6], np.float32)
+        rep_emb = imp.body_emb(rep[10], rep[6])
         if _max_cosine(rep_emb, sent_embs) >= settings.DEDUP_COSINE:
             continue  # уже был в одном из прошлых дайджестов
         candidates.append({
