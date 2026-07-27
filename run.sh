@@ -8,12 +8,15 @@ set -u
 BASE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY="$BASE/venv/bin/python"
 
-"$PY" "$BASE/main.py" && exit 0
+"$PY" "$BASE/main.py" || {
+    # Страховка: main.py умер, не дойдя до feeds.build_all(). Фид «все статьи»
+    # обязан обновляться каждый час независимо от причины — собираем его из
+    # того, что уже лежит в БД (модель тут не нужна, только numpy).
+    echo "run.sh: main.py вышел с кодом $? — пересобираю фиды из БД" >&2
+    "$PY" -c "import main, db, feeds; main.setup_logging(); db.init(); feeds.build_all()"
+}
 
-# main.py умер, не дойдя до feeds.build_all(). Обычная причина на этом VPS —
-# SIGILL (132) внутри libtorch_cpu: у QEMU-процессора нет AVX, а MKL-ядро в
-# колесе torch+cpu его использует (см. README, «Известные проблемы»). Фид
-# «все статьи» обязан обновляться каждый час независимо от этого — собираем
-# его из того, что уже лежит в БД (модель тут не нужна, только numpy).
-echo "run.sh: main.py вышел с кодом $? — пересобираю фиды из БД" >&2
-exec "$PY" -c "import main, db, feeds; main.setup_logging(); db.init(); feeds.build_all()"
+# Фиды пересобраны — сразу просим FreshRSS их забрать, чтобы читалка не ждала
+# своего расписания. У actualize_script.php есть собственный мьютекс, поэтому
+# наложение с дайджестом (daily_run.sh) безопасно: второй запуск сам выйдет.
+exec docker exec freshrss php /var/www/FreshRSS/app/actualize_script.php

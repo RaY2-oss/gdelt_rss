@@ -78,7 +78,14 @@ def get_model():
     if _model is None:
         from sentence_transformers import SentenceTransformer
         log.info("Загрузка e5-модели %s ...", settings.EMBEDDING_MODEL)
-        _model = SentenceTransformer(settings.EMBEDDING_MODEL)
+        # backend="onnx", а не torch: у процессора этого VPS нет AVX, а MKL
+        # внутри torch+cpu всё равно выполняет AVX-инструкцию и ядро убивает
+        # процесс по SIGILL (см. README, «Известные проблемы»). onnxruntime
+        # считает своей математикой (MLAS) с честной диспетчеризацией под
+        # старый CPU; вектора совпадают с torch (cosine 1.0), поэтому уже
+        # сохранённые в БД эмбеддинги остаются сравнимыми.
+        _model = SentenceTransformer(settings.EMBEDDING_MODEL, backend="onnx",
+                                     model_kwargs={"file_name": "onnx/model.onnx"})
     return _model
 
 

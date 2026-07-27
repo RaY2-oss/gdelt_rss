@@ -4,4 +4,8 @@
 # Без flock — как и run.sh: прогон обязан состояться, даже если часовой идёт.
 set -u
 BASE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "$BASE/venv/bin/python" "$BASE/daily_digest.py" "$@"
+
+"$BASE/venv/bin/python" "$BASE/daily_digest.py" "$@"
+
+# Как и в run.sh: дайджест собран — сразу отдаём его FreshRSS.
+exec docker exec freshrss php /var/www/FreshRSS/app/actualize_script.php
