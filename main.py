@@ -8,6 +8,7 @@ build_all пишет фиды только по оценённым, prune чис
 """
 import logging
 import os
+import sqlite3
 import sys
 
 import settings
@@ -39,7 +40,12 @@ def prune():
         conn.commit()
         import seen_store
         seen_store.prune(conn, 30)
-        conn.execute("VACUUM")
+        try:
+            conn.execute("VACUUM")
+        except sqlite3.OperationalError as exc:
+            # VACUUM требует эксклюзивной блокировки — параллельный прогон
+            # (flock снят, см. run.sh) её не даст. Место освободит следующий.
+            logging.getLogger("gdelt_rss").warning("VACUUM пропущен: %s", exc)
         return cur.rowcount
     finally:
         conn.close()

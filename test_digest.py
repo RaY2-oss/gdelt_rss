@@ -108,6 +108,23 @@ def test_mmr_prefers_diverse_over_near_duplicate():
     assert urls == ["a", "c"], "MMR должен предпочесть разнообразие дублю с похожей важностью"
 
 
+def test_daily_digest_defaults_to_previous_day():
+    """Регресс на пустой _important: cron дёргает daily_digest.py в 00:00 UTC,
+    когда сегодняшний день ещё пуст — день по умолчанию обязан быть вчерашним,
+    иначе build_country_digest не находит ни одного кандидата (см. digest.py,
+    шаг 4: в дайджест идут только статьи с датой == day)."""
+    import subprocess, sys, os
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "daily_digest.py")
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import sys, runpy; sys.argv=['daily_digest.py'];"
+         "import digest; digest.build_all=lambda day=None: print('DAY', day);"
+         "import db; db.init=lambda: None;"
+         f"runpy.run_path({src!r}, run_name='__main__')"],
+        capture_output=True, text=True, cwd=os.path.dirname(src))
+    assert f"DAY {YDAY}" in out.stdout, out.stdout + out.stderr
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
