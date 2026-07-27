@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS articles (
     language     TEXT,
     title_hash   TEXT,              -- дешёвый дедуп одинаковых заголовков
     embedding    BLOB,             -- e5 float32
-    importance   INTEGER            -- оценка LLM 0..100; NULL = не оценено
+    entities     TEXT,              -- субъекты из GKG V1Persons/V1Organizations (см. entities.py)
+    importance   INTEGER            -- оценка LLM 0..100 + поправка на политический вес; NULL = не оценено
 );
 CREATE INDEX IF NOT EXISTS idx_articles_country_time ON articles(country, fetched_at);
 CREATE INDEX IF NOT EXISTS idx_articles_unscored ON articles(importance) WHERE importance IS NULL;
@@ -66,6 +67,8 @@ def init() -> None:
             conn.execute("ALTER TABLE articles ADD COLUMN title_en TEXT")
         if "text_en" not in cols:
             conn.execute("ALTER TABLE articles ADD COLUMN text_en TEXT")
+        if "entities" not in cols:
+            conn.execute("ALTER TABLE articles ADD COLUMN entities TEXT")
         seen_store.ensure(conn)
         conn.commit()
     finally:

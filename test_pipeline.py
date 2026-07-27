@@ -21,6 +21,31 @@ def test_parse_scores():
     assert pipeline._parse_scores('{"1": 10, "9": 90}', 3) == {1: 10}
 
 
+def test_adjust_by_political_weight():
+    """Поправка на политический вес: локальная заметка (одно громкое имя на всю
+    статью) уходит вниз, общенациональный сюжет — вверх. См. entities.py."""
+    import entities
+    corpus = ["ministry of education;ali veli",
+              "ministry of education;tubitak;aselsan",
+              "tubitak;aselsan;ministry of industry",
+              "tubitak;aselsan;ministry of industry;recep tayyip erdogan"]
+    df = entities.document_freq(corpus)
+
+    local = pipeline._adjust(50, corpus[0], df)
+    national = pipeline._adjust(50, corpus[3], df)
+    assert local < 50 < national, (local, national)
+    assert national <= 100 and local >= 0
+
+    # пустой словарь (страна ещё не набрала статистики) — оценка не трогается
+    assert pipeline._adjust(50, corpus[0], None) == 50
+    assert pipeline._adjust(50, corpus[0], {}) == 50
+
+    # accepted не должен провалиться ниже RELEVANCE_CUTOFF из-за штрафа:
+    # вердикт уже поставлен по сырой оценке, из фида _all статья не вылетает
+    assert pipeline._adjust(settings.RELEVANCE_CUTOFF + 1, "", df) > settings.RELEVANCE_CUTOFF
+    assert pipeline._adjust(settings.RELEVANCE_CUTOFF, "", df) == 0
+
+
 def test_title_hash():
     assert pipeline._title_hash("Hello, World!") == pipeline._title_hash("hello   world")
     assert pipeline._title_hash("") is None

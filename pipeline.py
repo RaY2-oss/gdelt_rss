@@ -18,7 +18,9 @@
     seen_urls, см. settings.PREFILTER_MIN_LABELS) — уверенные отказы не
     тратят LLM-вызов и сразу получают importance=0. Остальные батчами по
     LLM_BATCH уходят в _call_openrouter_raw (свой AI-стек, см. model_rotation.py),
-    модель ставит 0..100; сбой провайдеров -> importance остаётся NULL
+    модель ставит 0..100, к которым _adjust() прибавляет поправку на политический
+    вес статьи (заметные персоны/организации из GKG, см. entities.py — так
+    локальная заметка не добирается до порога дайджеста); сбой провайдеров -> importance остаётся NULL
     (переоценка на следующем прогоне, как pending-вердикт). Каждый вердикт
     (accepted/rejected по settings.RELEVANCE_CUTOFF) пишется в seen_urls —
     это и есть обучающая выборка для prefilter'а следующего прогона.
@@ -45,6 +47,7 @@ from trafilatura import bare_extraction
 
 import settings
 import db
+import entities            # политический вес статьи по субъектам GKG (см. entities.py)
 import feeds                # локальный: переиспользуем _cluster для дедупа перед LLM
 import gkg_filter
 import seen_store
@@ -57,8 +60,11 @@ log = logging.getLogger("gdelt_rss")
 
 GKG_URL_EN = "http://data.gdeltproject.org/gdeltv2/{ts}.gkg.csv.zip"
 GKG_URL_TL = "http://data.gdeltproject.org/gdeltv2/{ts}.translation.gkg.csv.zip"
-GKG_USECOLS = [1, 3, 4, 7, 8, 9, 10]
-GKG_COLNAMES = ["date", "source", "url", "v1t", "v2t", "v1l", "v2l"]
+# 11 = V1Persons, 13 = V1Organizations — NER самого GDELT, наш «словарь
+# политических субъектов» (см. entities.py). Порядок обязан быть возрастающим:
+# pandas раздаёт names по позиции выбранных колонок в файле.
+GKG_USECOLS = [1, 3, 4, 7, 8, 9, 10, 11, 13]
+GKG_COLNAMES = ["date", "source", "url", "v1t", "v2t", "v1l", "v2l", "v1p", "v1o"]
 HTTP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
     "Accept-Language": "en,ru,ar,fr,zh,hi,fa,tr;q=0.9,*;q=0.5",
@@ -119,7 +125,7 @@ def fetch_gkg_file(ts, translation=False):
 
 
 def collect_urls():
-    """-> dict url -> (country_key, gkg_date). Один проход по дампам, все страны."""
+    """-> dict url -> (country_key, gkg_date, entities). Один проход по дампам, все страны."""
     cfgs = {k: _cfg(fips) for k, fips in settings.COUNTRIES.items()}
     stats = {k: {} for k in cfgs}
     found = {}
@@ -131,8 +137,8 @@ def collect_urls():
             if dfr is None or dfr.empty:
                 continue
             for ck, cfg in cfgs.items():
-                for url, gdate in gkg_filter.select(dfr, cfg, stats[ck]):
-                    found.setdefault(url, (ck, gdate))  # первая страна выигрывает
+                for url, gdate, ents in gkg_filter.select(dfr, cfg, stats[ck]):
+                    found.setdefault(url, (ck, gdate, ents))  # первая страна выигрывает
         time.sleep(settings.GKG_FETCH_DELAY)
     passed = sum(s.get("passed", 0) for s in stats.values())
     log.info("GKG готово: уникальных URL %d (прошло строк по всем странам %d)",
@@ -201,7 +207,7 @@ def collect():
         # title_hash'и, уже присутствующие в окне БД (дешёвый дедуп до LLM).
         known_hashes = {r[0] for r in conn.execute(
             "SELECT DISTINCT title_hash FROM articles WHERE title_hash IS NOT NULL")}
-        todo = [(u, c, d) for u, (c, d) in found.items() if u not in final]
+        todo = [(u, c, d, e) for u, (c, d, e) in found.items() if u not in final]
         log.info("К обработке новых URL: %d (пропущено по журналу %d)",
                  len(todo), len(found) - len(todo))
 
@@ -211,11 +217,10 @@ def collect():
         # hash-дедуп и запись остаются на главном потоке (known_hashes без
         # блокировки; какой из дублей выиграет — не важно).
         def _fetch(item):
-            url, country, gdate = item
-            return item, fetch_and_extract(url)
+            return item, fetch_and_extract(item[0])
 
         with ThreadPoolExecutor(max_workers=settings.FETCH_WORKERS) as ex:
-            for (url, country, gdate), (text, title, pdate) in \
+            for (url, country, gdate, ents), (text, title, pdate) in \
                     ex.map(_fetch, todo):
                 if not text or len(text) < settings.MIN_TEXT_LENGTH:
                     pending.append((url, None, "short", None)); continue
@@ -231,19 +236,19 @@ def collect():
                 # изданий) и топит реальные дубли ниже DEDUP_COSINE.
                 embed_texts.append(title or text[:200])
                 metas.append((url, country, now, pdate or gdate, title, text,
-                              _detect_lang(text), th))
+                              _detect_lang(text), th, ents))
 
         # e5-эмбеддинги батчами (один проход модели), затем вставка.
         inserted = 0
         embs = _embed(embed_texts) if embed_texts else []
         for meta, emb in zip(metas, embs):
-            url, country, fa, pdate, title, text, lang, th = meta
+            url, country, fa, pdate, title, text, lang, th, ents = meta
             try:
                 conn.execute(
                     "INSERT OR IGNORE INTO articles "
                     "(url,country,fetched_at,publish_date,title,text,language,"
-                    "title_hash,embedding,importance) VALUES (?,?,?,?,?,?,?,?,?,NULL)",
-                    (url, country, fa, pdate, title, text, lang, th, emb.tobytes()))
+                    "title_hash,embedding,entities,importance) VALUES (?,?,?,?,?,?,?,?,?,?,NULL)",
+                    (url, country, fa, pdate, title, text, lang, th, emb.tobytes(), ents))
                 inserted += 1
                 pending.append((url, country, "accepted", emb))
             except Exception as exc:
@@ -339,11 +344,32 @@ def _group_for_scoring(rows):
     embs = [np.frombuffer(r[3], np.float32) for r in rows]
     labels = feeds._cluster(embs, settings.DEDUP_COSINE, titles=[r[1] for r in rows])
     groups, reps = {}, {}
-    for (url, title, text, _emb), emb, lab in zip(rows, embs, labels):
+    for r, emb, lab in zip(rows, embs, labels):   # r может нести лишние колонки
+        url, title, text = r[0], r[1], r[2]
         lab = int(lab)
         groups.setdefault(lab, []).append(url)
         reps.setdefault(lab, (url, title, text, emb))
     return list(reps.items()), groups
+
+
+def _adjust(llm_score, ents, ent_df):
+    """Оценка LLM + поправка на политический вес статьи (см. entities.py).
+
+    Ниже RELEVANCE_CUTOFF штраф статью не опускает: вердикт accepted/rejected
+    уже поставлен по СЫРОЙ оценке LLM (и он же — разметка для предфильтра),
+    а из широкого фида _all статья вылетать не должна. Фактор нужен, чтобы
+    локальная заметка не добиралась до MIN_IMPORTANCE дайджеста.
+
+    ent_df пустой/None -> оценка не трогается: словаря по этой стране ещё нет
+    (см. score())."""
+    if not ent_df:
+        return llm_score
+    w = entities.weight(entities.prominent(ents, ent_df, settings.ENTITY_MIN_DF),
+                        settings.ENTITY_FULL_AT)
+    adj = llm_score + round(settings.ENTITY_BONUS * w
+                            - settings.ENTITY_PENALTY * (1.0 - w))
+    floor = settings.RELEVANCE_CUTOFF + 1 if llm_score > settings.RELEVANCE_CUTOFF else 0
+    return max(floor, min(100, adj))
 
 
 def score():
@@ -366,11 +392,23 @@ def score():
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         for country in countries:
             rows = conn.execute(
-                "SELECT url,title,text,embedding FROM articles "
+                "SELECT url,title,text,embedding,entities FROM articles "
                 "WHERE importance IS NULL AND country=? ORDER BY fetched_at DESC",
                 (country,)).fetchall()
             # url -> np.ndarray (seen_store.mark сам вызывает .tobytes(), сырой blob не подходит)
             url_emb = {r[0]: (np.frombuffer(r[3], np.float32) if r[3] else None) for r in rows}
+            url_ents = {r[0]: r[4] for r in rows}
+            # Док-частота субъектов по окну ЭТОЙ страны (таблица и так хранит
+            # только KEEP_HOURS, см. main.prune) — самонастраивающийся словарь
+            # заметных персон/организаций для _adjust().
+            ent_df = entities.document_freq(
+                r[0] for r in conn.execute(
+                    "SELECT entities FROM articles WHERE country=?", (country,)))
+            # Пока в окне страны ни один субъект не перешагнул порог заметности,
+            # словаря фактически нет: включённый фактор просто равномерно уронил
+            # бы всю малую страну ниже MIN_IMPORTANCE. Выключаем его целиком.
+            if not any(v >= settings.ENTITY_MIN_DF for v in ent_df.values()):
+                ent_df = None
             disp = settings.country_display(country)
             items, groups = _group_for_scoring(rows)
 
@@ -411,7 +449,7 @@ def score():
                     sc = scores.get(i, 0)
                     verdict = "accepted" if sc > settings.RELEVANCE_CUTOFF else "rejected"
                     for url in groups[lab]:
-                        ups.append((sc, url))
+                        ups.append((_adjust(sc, url_ents.get(url), ent_df), url))
                         marks.append((url, 0, verdict, url_emb.get(url)))
                 conn.executemany("UPDATE articles SET importance=? WHERE url=?", ups)
                 seen_store.mark(conn, marks, day)
