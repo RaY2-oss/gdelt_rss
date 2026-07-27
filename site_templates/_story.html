@@ -2,6 +2,7 @@
    тона кодируют одну и ту же величину, число рядом — прямая подпись к ней. #}
 {% macro story(s, show_country=True, i=0) %}
 <article class="story" style="--w: {{ s.score }}; --i: {{ i if i < 20 else 20 }}" data-tier="{{ s.tier }}"
+         data-score="{{ s.score }}"
          data-find="{{ s.title|lower }} {{ s.country_ru|lower }} {{ s.domain }}">
   <div class="story__sig" title="Важность {{ s.score }} из 100 — оценка модели по теме и значимости">
     <span class="story__bar" aria-hidden="true"></span>
@@ -64,8 +65,15 @@
 {% endmacro %}
 
 
+{# То же деление, что у двух фидов страны: «всё» — граница приёма
+   (RELEVANCE_CUTOFF), «важное» — порог дайджеста (MIN_IMPORTANCE). Считается
+   на клиенте по data-score, потому что обе выборки уже на странице. #}
 {% macro filter(placeholder='Фильтр по ленте') %}
 <form class="filter" role="search" onsubmit="return false">
+  <div class="views" role="group" aria-label="Что показывать">
+    <button class="views__btn is-on" type="button" data-view="0">Всё</button>
+    <button class="views__btn" type="button" data-view="{{ min_importance }}">Только важное</button>
+  </div>
   <label class="filter__label" for="q">Фильтр</label>
   <input class="filter__input" id="q" type="search" placeholder="{{ placeholder }}"
          autocomplete="off" data-filter>

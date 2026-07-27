@@ -13,22 +13,24 @@
 изданий подхватило сюжет) — поэтому `stories` держит членов кластера, а не
 только победителя.
 
-Соединение с БД — read-only (`mode=ro`): сборка сайта идёт по тем же данным,
-которые в этот момент может писать пайплайн, и уронить их она не должна.
+В БД сборка пишет ровно одно: переводы своих представителей кластеров, в тот
+же кэш `articles.title_en/text_en`, которым пользуются фид и дайджест.
 """
 import json
 import os
 import re
 import shutil
-import sqlite3
 import sys
+import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+import db
 import settings
+import translate
 import importance as imp
 from feeds import _cluster, _pubdate, _TOKEN_RE
 
@@ -138,11 +140,28 @@ _ALNUM = re.compile(r"[^0-9a-zа-яё]+")
 _TAIL = re.compile(r"\s*[|\-–—:·»]\s*([^|\-–—:·»]{2,40})\s*$")
 _DUP_PROBE = 40   # длина зонда для поиска повторённого заголовка
 
+# Перевод — работа фида (feeds.build_country переводит всё, что в него попало);
+# здесь только добор по своим представителям, которых фид не покрыл. Два
+# потолка: на страну — чтобы одна крупная не съела прогон целиком, и общий по
+# времени — потому что цена статьи это сетевой round-trip, а сборка сидит в том
+# же часовом прогоне, что и оценка. Недобранное подберёт следующий прогон.
+TRANSLATE_BUDGET = 12
+TRANSLATE_BUDGET_S = 120
+_translate_until = 0.0
+
+
+def _readable(row):
+    """Заголовок уже читается: перевод лежит в кэше или язык оригинала такой,
+    что переводить нечего (тот же список, по которому это решает translate)."""
+    return bool(row[8]) or (row[7] or "") in translate._SKIP_LANGS
+
 
 # ── Данные ──────────────────────────────────────────────────────────────────
 def connect():
-    """Read-only: пайплайн может писать в ту же БД во время сборки."""
-    return sqlite3.connect(f"file:{settings.DB_PATH}?mode=ro", uri=True)
+    """Не read-only: сборка дописывает переводы для своих представителей
+    кластеров (см. stories). Общий кэш с фидом, WAL держит параллельную
+    запись пайплайна."""
+    return db.connect()
 
 
 def _clean_title(title, domain=""):
@@ -237,7 +256,7 @@ def window_rows(conn, country, hours):
         (country, settings.RELEVANCE_CUTOFF, since)).fetchall()
 
 
-def stories(rows, country, now):
+def stories(conn, rows, country, now):
     """rows → сюжеты, отсортированные как в фиде (важность, затем охват).
 
     Кластеризация та же, что в `feeds._top_items`, но члены кластера здесь не
@@ -255,10 +274,31 @@ def stories(rows, country, now):
     for row, lab in zip(rows, labels):
         groups.setdefault(int(lab), []).append(row)
 
+    # Представителя фид берёт по максимуму важности (feeds._top_items), и тут
+    # ключ тот же — но первым разрядом идёт читаемость. Разбиение у сайта и
+    # фида расходится (_cluster мостит кросс-языковые дубли по title_en, а к
+    # сборке сайта фид уже дописал часть переводов), поэтому головой кластера
+    # регулярно оказывалась статья, которую никто не переводил.
+    #
+    # Члены кластера — один и тот же сюжет (косинус >= DEDUP_COSINE), так что
+    # показать вместо неё переведённого соседа не стоит ни одного обращения к
+    # переводчику. Сортировка целиком, а не max(): sources ниже должны
+    # начинаться с того же издания, на которое ведёт заголовок.
+    for members in groups.values():
+        members.sort(key=lambda r: (_readable(r), r[5] or 0), reverse=True)
+
+    # Что соседом не закрылось — переводим сами, в общий с фидом кэш, сверху по
+    # важности и в пределах бюджета (см. TRANSLATE_BUDGET).
+    todo = sorted((m[0] for m in groups.values() if not _readable(m[0])),
+                  key=lambda r: (r[5] or 0), reverse=True)[:TRANSLATE_BUDGET] \
+        if time.monotonic() < _translate_until else []
+    en = translate.translate_missing(
+        conn, [(r[0], r[1], r[2], r[7], r[8], r[9]) for r in todo])
+
     out = []
     for members in groups.values():
-        members.sort(key=lambda r: (r[5] or 0), reverse=True)
         url, title, text, pdate, fetched, score, _e, lang, t_en, x_en, ents = members[0]
+        t_en, x_en = en.get(url, (t_en, x_en))
         sources, seen_domains = [], set()
         for m in members:
             d = imp.domain(m[0])
@@ -308,7 +348,7 @@ def country_data(conn, country, now):
         wide = window_rows(conn, country, settings.KEEP_HOURS)
         if len(wide) > len(rows):
             rows, hours = wide, settings.KEEP_HOURS
-    return stories(rows, country, now), hours
+    return stories(conn, rows, country, now), hours
 
 
 def top_entities(items, limit=ENTITY_TOP):
@@ -351,6 +391,9 @@ def _env():
     )
     env.filters["plural"] = _plural
     env.filters["tier"] = _tier
+    # именно global, а не переменная рендера: макросы в _story.html
+    # импортируются без `with context` и переменных страницы не видят
+    env.globals["min_importance"] = settings.MIN_IMPORTANCE
     return env
 
 
@@ -361,7 +404,9 @@ def _write(path, content):
 
 
 def build(out_dir=OUT_DIR):
+    global _translate_until
     now = datetime.now(timezone.utc)
+    _translate_until = time.monotonic() + TRANSLATE_BUDGET_S
     env = _env()
     conn = connect()
     try:

@@ -414,7 +414,30 @@ a { color: inherit; }
   align-items: center;
   gap: 0.625rem;
   margin-top: 0.875rem;
+  flex-wrap: wrap;
 }
+
+/* «Всё / только важное» — то же деление, что у двух RSS страны. */
+.views {
+  display: flex;
+  flex: none;
+  border: 1px solid var(--rule-strong);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.views__btn {
+  padding: 0.5rem 0.75rem;
+  border: 0;
+  background: var(--panel);
+  color: var(--ink-3);
+  font: 400 0.8125rem/1 var(--font-text);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+.views__btn + .views__btn { border-inline-start: 1px solid var(--rule-strong); }
+.views__btn:hover { color: var(--ink); }
+.views__btn.is-on { background: var(--sig-4); color: var(--surface); }
 .filter__label { position: absolute; left: -9999px; }
 .filter__input {
   flex: 1 1 auto;

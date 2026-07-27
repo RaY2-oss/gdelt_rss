@@ -71,6 +71,7 @@ HTTP_HEADERS = {
     "Accept-Language": "en,ru,ar,fr,zh,hi,fa,tr;q=0.9,*;q=0.5",
 }
 _EMBED_BATCH = 16
+_EMBED_CHUNK = 200   # порция между коммитами в embed_bodies (шаг проверки дедлайна)
 _model = None
 
 # Не-новостные материалы (интервью/колонки/мнения) — быстрый regex-отсев.
@@ -377,8 +378,17 @@ def embed_bodies(limit=None):
 
     Ограничение на прогон (settings.EMBED_BODY_MAX_PER_RUN) не даёт стадии
     растянуть прогон на исторических хвостах; недосчитанное подберёт следующий.
+
+    Порциями с коммитом каждой, а не одним вызовом на весь остаток. Стадия идёт
+    ПЕРЕД feeds.build_all(), и на этом CPU (без AVX, onnxruntime — см.
+    get_model) очередь в потолок за час не считается. Одним вызовом она до
+    коммита не доходила: прогон обрывался следующим часовым, в БД не попадало
+    ничего, очередь оставалась той же — и фиды не пересобирались ВООБЩЕ, а
+    вместе с ними не обновлялись переводы. Дедлайн отдаёт остаток следующему
+    прогону, посчитанное остаётся в БД.
     """
     limit = settings.EMBED_BODY_MAX_PER_RUN if limit is None else limit
+    deadline = time.monotonic() + settings.EMBED_BODY_BUDGET_S
     conn = db.connect()
     try:
         rows = conn.execute(
@@ -389,16 +399,24 @@ def embed_bodies(limit=None):
         if not rows:
             log.info("Эмбеддинг тел: всё посчитано")
             return 0
-        embs = _embed([(r[1] or "")[:settings.EMBED_BODY_CHARS] for r in rows])
-        conn.executemany("UPDATE articles SET embedding_body=? WHERE url=?",
-                         [(e.tobytes(), r[0]) for r, e in zip(rows, embs)])
-        conn.commit()
+        done = 0
+        for i in range(0, len(rows), _EMBED_CHUNK):
+            chunk = rows[i:i + _EMBED_CHUNK]
+            embs = _embed([(r[1] or "")[:settings.EMBED_BODY_CHARS] for r in chunk])
+            conn.executemany("UPDATE articles SET embedding_body=? WHERE url=?",
+                             [(e.tobytes(), r[0]) for r, e in zip(chunk, embs)])
+            conn.commit()
+            done += len(chunk)
+            if time.monotonic() > deadline:
+                log.info("Эмбеддинг тел: бюджет %d с исчерпан, остаток — следующему прогону",
+                         settings.EMBED_BODY_BUDGET_S)
+                break
         left = conn.execute(
             "SELECT COUNT(*) FROM articles WHERE embedding_body IS NULL "
             "AND text IS NOT NULL AND importance > ?",
             (settings.RELEVANCE_CUTOFF,)).fetchone()[0]
-        log.info("Эмбеддинг тел: посчитано %d, осталось в очереди %d", len(rows), left)
-        return len(rows)
+        log.info("Эмбеддинг тел: посчитано %d, осталось в очереди %d", done, left)
+        return done
     finally:
         conn.close()
 

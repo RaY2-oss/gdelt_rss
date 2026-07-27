@@ -130,14 +130,26 @@ def _mmr_select(candidates, n_pick, lam=None):
     return selected
 
 
+def _parse_dt(v):
+    try:
+        d = dtparser.parse(v)
+    except (TypeError, ValueError):
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
 def _pubdate(publish_date, fetched_at):
-    for v in (publish_date, fetched_at):
-        try:
-            d = dtparser.parse(v)
-            return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
-        except (TypeError, ValueError):
-            continue
-    return datetime.now(timezone.utc)
+    """GKG отдаёт publish_date без времени ('2026-07-27'), dateutil разбирает
+    его в полночь UTC — и вся суточная лента получает одну метку 00:00.
+
+    Если статья встречена в тот же календарный день, время первой встречи
+    ближе к правде: сбор идёт каждые 15 минут. День при этом не меняется, так
+    что digest._row_date («опубликовано сегодня») работает как работал.
+    """
+    pd, fa = _parse_dt(publish_date), _parse_dt(fetched_at)
+    if pd and fa and ":" not in str(publish_date) and fa.date() == pd.date():
+        return fa
+    return pd or fa or datetime.now(timezone.utc)
 
 
 def _top_items(rows, country):

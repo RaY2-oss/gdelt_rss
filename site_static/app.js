@@ -31,27 +31,40 @@
     });
   }
 
-  // ── Фильтр по ленте ───────────────────────────────────────────────────
+  // ── Фильтр по ленте: слово + порог важности ───────────────────────────
   var input = document.querySelector('[data-filter]');
   var counter = document.querySelector('[data-filter-count]');
   var none = document.querySelector('.feed__none');
+  var views = Array.prototype.slice.call(document.querySelectorAll('[data-view]'));
   var stories = Array.prototype.slice.call(document.querySelectorAll('.story'));
 
-  if (input && stories.length) {
+  if (stories.length && (input || views.length)) {
+    var floor = 0;
     var apply = function () {
-      var q = input.value.trim().toLowerCase();
+      var q = input ? input.value.trim().toLowerCase() : '';
       var shown = 0;
       stories.forEach(function (el) {
-        var hit = !q || el.dataset.find.indexOf(q) !== -1;
+        var hit = (!q || el.dataset.find.indexOf(q) !== -1) &&
+                  (+el.dataset.score || 0) >= floor;
         el.hidden = !hit;
         if (hit) shown++;
       });
-      if (counter) counter.textContent = q ? shown + ' из ' + stories.length : '';
-      if (none) none.hidden = !q || shown > 0;
+      var narrowed = q || floor;
+      if (counter) counter.textContent = narrowed ? shown + ' из ' + stories.length : '';
+      if (none) none.hidden = !narrowed || shown > 0;
     };
-    input.addEventListener('input', apply);
+
+    views.forEach(function (b) {
+      b.addEventListener('click', function () {
+        floor = +b.dataset.view || 0;
+        views.forEach(function (o) { o.classList.toggle('is-on', o === b); });
+        apply();
+      });
+    });
+
+    if (input) input.addEventListener('input', apply);
     // страница могла восстановиться из bfcache с непустым полем
-    if (input.value) apply();
+    if (input && input.value) apply();
   }
 
   // ── Тема ──────────────────────────────────────────────────────────────
