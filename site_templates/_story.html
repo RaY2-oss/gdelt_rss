@@ -1,0 +1,74 @@
+{# Одна строка ленты. --w = важность в процентах: длина столбика и ступень
+   тона кодируют одну и ту же величину, число рядом — прямая подпись к ней. #}
+{% macro story(s, show_country=True, i=0) %}
+<article class="story" style="--w: {{ s.score }}; --i: {{ i if i < 20 else 20 }}" data-tier="{{ s.tier }}"
+         data-find="{{ s.title|lower }} {{ s.country_ru|lower }} {{ s.domain }}">
+  <div class="story__sig" title="Важность {{ s.score }} из 100 — оценка модели по теме и значимости">
+    <span class="story__bar" aria-hidden="true"></span>
+    <span class="story__score">{{ s.score }}</span>
+  </div>
+
+  <h3 class="story__title">
+    <a class="story__link" href="{{ s.url }}" rel="noopener nofollow" {% if s.lang_code %}lang="{{ s.lang_code }}"{% endif %}>{{ s.title }}</a>
+  </h3>
+
+  <p class="story__meta">
+    {% if show_country %}<a class="story__country" href="/c/{{ s.country }}.html">{{ s.country_ru }}</a>{% endif %}
+    <span class="story__source">{{ s.domain }}</span>
+    {% if s.outlets > 1 %}
+    <span class="story__outlets" title="Столько разных изданий написали об этом сюжете">{{ s.outlets }} {{ s.outlets_word }}</span>
+    {% endif %}
+    <time class="story__time" datetime="{{ s.iso }}">{{ s.ago }}</time>
+    {# язык у части статей не определился — тогда просто «перевод», без «пер. с » в никуда #}
+    {% if s.translated %}<span class="story__tag" title="Заголовок и текст переведены с языка оригинала">{{ 'пер. с ' ~ s.lang if s.lang else 'перевод' }}</span>
+    {% elif s.lang %}<span class="story__tag story__tag--plain">{{ s.lang }}</span>{% endif %}
+  </p>
+
+  {% if s.snippet %}<p class="story__snippet" {% if not s.translated and s.lang_code %}lang="{{ s.lang_code }}"{% endif %}>{{ s.snippet }}</p>{% endif %}
+
+  {% if s.sources|length > 1 %}
+  <details class="story__more">
+    <summary class="story__summary">Ещё {{ (s.sources|length) - 1 }} {{ ((s.sources|length) - 1)|plural('источник','источника','источников') }}</summary>
+    <ul class="story__sources">
+      {% for src in s.sources[1:] %}
+      <li><a href="{{ src.url }}" rel="noopener nofollow">{{ src.domain }}</a></li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+</article>
+{% endmacro %}
+
+
+{# Легенда шкалы. Один раз над лентой — иначе число 0–100 ничего не значит. #}
+{% macro legend() %}
+<div class="legend">
+  <span class="legend__label">Важность</span>
+  <span class="legend__ramp" aria-hidden="true">
+    {% for t in range(5) %}<i data-tier="{{ t }}"></i>{% endfor %}
+  </span>
+  <span class="legend__ends"><b>5</b> фоновая — <b>100</b> сильный сигнал</span>
+</div>
+{% endmacro %}
+
+
+{% macro feed(items, show_country=True, empty='За выбранное окно ничего не набралось.') %}
+{% if items %}
+<div class="feed" id="feed">
+  {% for s in items %}{{ story(s, show_country, loop.index0) }}{% endfor %}
+</div>
+<p class="feed__none" hidden>Ничего не найдено — попробуйте другое слово.</p>
+{% else %}
+<p class="empty">{{ empty }}</p>
+{% endif %}
+{% endmacro %}
+
+
+{% macro filter(placeholder='Фильтр по ленте') %}
+<form class="filter" role="search" onsubmit="return false">
+  <label class="filter__label" for="q">Фильтр</label>
+  <input class="filter__input" id="q" type="search" placeholder="{{ placeholder }}"
+         autocomplete="off" data-filter>
+  <span class="filter__count" data-filter-count></span>
+</form>
+{% endmacro %}

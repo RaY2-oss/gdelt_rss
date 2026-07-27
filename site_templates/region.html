@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% from "_story.html" import feed, legend, filter %}
+{% set current_region = region.slug %}
+
+{% block title %}{{ region.name }} — {{ site_title }}{% endblock %}
+{% block description %}Наука и технологии: {{ region.name }}. {{ region.n }} сюжетов за сутки, ранжированы по важности.{% endblock %}
+
+{% block content %}
+<section class="page wrap">
+  <nav class="crumbs" aria-label="Хлебные крошки">
+    <a href="/">Лента</a> <span aria-hidden="true">/</span> <span>{{ region.name }}</span>
+  </nav>
+
+  <header class="page__head">
+    <h1 class="page__title">{{ region.name }}</h1>
+    <p class="page__note">
+      {{ region.countries|length }} {{ (region.countries|length)|plural('страна','страны','стран') }},
+      {{ region.stories|length }} {{ (region.stories|length)|plural('сюжет','сюжета','сюжетов') }} за {{ status.window }} ч.
+    </p>
+  </header>
+
+  <ul class="chips">
+    {% for c in region.countries %}
+    <li class="chips__item" data-tier="{{ c.top|tier }}">
+      <a href="/c/{{ c.key }}.html">{{ c.name }} <b>{{ c.n }}</b></a>
+    </li>
+    {% endfor %}
+  </ul>
+
+  <div class="board__head board__head--tight">
+    {{ legend() }}
+    {{ filter('Тема, страна или издание') }}
+  </div>
+
+  {{ feed(items, True, 'За сутки по этому региону ничего не набралось. Загляните на страницу отдельной страны — там окно шире.') }}
+</section>
+{% endblock %}

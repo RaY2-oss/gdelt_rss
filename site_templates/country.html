@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% from "_story.html" import feed, legend, filter %}
+{% set current_region = region_slug %}
+
+{% block title %}{{ country_ru }} — {{ site_title }}{% endblock %}
+{% block description %}Наука и технологии: {{ country_ru }}. {{ items|length }} сюжетов, ранжированы по важности.{% endblock %}
+
+{% block content %}
+<section class="page wrap">
+  <nav class="crumbs" aria-label="Хлебные крошки">
+    <a href="/">Лента</a> <span aria-hidden="true">/</span>
+    <a href="/r/{{ region_slug }}.html">{{ region }}</a> <span aria-hidden="true">/</span>
+    <span>{{ country_ru }}</span>
+  </nav>
+
+  <header class="page__head">
+    <h1 class="page__title">{{ country_ru }}</h1>
+    <p class="page__note">
+      {% if items %}
+        {{ items|length }} {{ (items|length)|plural('сюжет','сюжета','сюжетов') }}
+        за {% if hours > status.window %}{{ (hours / 24)|round|int }} {{ (hours / 24)|round|int|plural('день','дня','дней') }}{% else %}{{ hours }} ч{% endif %}.
+        {% if hours > status.window %}<span class="page__widened">Окно расширено: за сутки по стране набралось слишком мало.</span>{% endif %}
+      {% else %}
+        За окно ничего не набралось.
+      {% endif %}
+    </p>
+    <p class="page__feeds">
+      RSS:
+      <a href="{{ feed_base }}/{{ country }}.xml">всё</a> ·
+      <a href="{{ feed_base }}/{{ country }}_digest.xml">только важное</a>
+    </p>
+  </header>
+
+  {% if entities %}
+  <section class="who">
+    <h2 class="who__title">Кто в новостях</h2>
+    <p class="who__note">Персоны и организации, которые чаще других повторяются в ленте страны. Извлечены из разметки GDELT, не из своего словаря имён.</p>
+    <ul class="who__list">
+      {% for e in entities %}
+      <li class="who__item"><span class="who__name">{{ e.name }}</span><span class="who__n">{{ e.n }}</span></li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if items %}
+  <div class="board__head board__head--tight">
+    {{ legend() }}
+    {{ filter('Тема или издание') }}
+  </div>
+  {% endif %}
+
+  {{ feed(items, False, 'Пайплайн пока не нашёл здесь ничего по теме. Страна остаётся на связи — загляните позже или посмотрите ' ~ region ~ ' целиком.') }}
+</section>
+{% endblock %}

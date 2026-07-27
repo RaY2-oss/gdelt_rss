@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ru" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ site_title }}{% endblock %}</title>
+<meta name="description" content="{% block description %}{{ tagline }}. Лента ранжируется автоматически: каждому сюжету присвоена важность 0–100.{% endblock %}">
+<meta name="color-scheme" content="light dark">
+<link rel="preload" href="/static/fonts/GolosText-900-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/fonts.css">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="/static/mark.svg" type="image/svg+xml">
+{% block head %}{% endblock %}
+<script>
+  // До первой отрисовки, иначе тёмная тема моргнёт белым.
+  try {
+    var t = localStorage.getItem('theme');
+    if (t) document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">К содержимому</a>
+
+<header class="top">
+  <div class="top__bar wrap">
+    <a class="mark" href="/">
+      <span class="mark__glyph" aria-hidden="true"></span>
+      <span class="mark__word">{{ site_title }}</span>
+    </a>
+
+    <form class="jump" role="search" onsubmit="return false">
+      <label class="jump__label" for="jump">Страна</label>
+      <input class="jump__input" id="jump" list="countries" type="search"
+             placeholder="Перейти к стране" autocomplete="off" enterkeyhint="go">
+      <datalist id="countries"></datalist>
+    </form>
+
+    <button class="theme" type="button" aria-label="Переключить тему" title="Светлая / тёмная тема">
+      <span class="theme__dot" aria-hidden="true"></span>
+    </button>
+  </div>
+
+  {# Регионы — своя строка: десять русских названий не влезают в одну строку
+     с логотипом и поиском, а обрезка навигации хуже лишних 34 пикселей. #}
+  <nav class="regions" aria-label="Регионы">
+    <div class="wrap regions__row">
+      {% for r in regions %}
+      {% if loop.first or r.part != regions[loop.index0 - 1].part %}
+      <span class="regions__part" aria-hidden="true">{{ r.part }}</span>
+      {% endif %}
+      <a class="regions__item{% if r.slug == current_region %} is-current{% endif %}"
+         href="/r/{{ r.slug }}.html" title="{{ r.name }}">{{ r.short }}</a>
+      {% endfor %}
+    </div>
+  </nav>
+
+  <div class="status">
+    <div class="wrap status__row">
+      <span class="status__live{% if not status.live %} is-stale{% endif %}">
+        <span class="status__pulse" aria-hidden="true"></span>
+        {{ 'приём' if status.live else 'застой' }}
+      </span>
+      <span class="status__cell"><b>{{ status.last_tick }}</b> последняя статья</span>
+      <span class="status__cell"><b>{{ status.countries }}</b> {{ status.countries|plural('страна','страны','стран') }} на связи</span>
+      <span class="status__cell"><b>{{ status.scored }}</b> {{ status.scored|plural('статья','статьи','статей') }} за {{ status.window }} ч</span>
+      <a class="status__cell status__link" href="/about.html">как это устроено</a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+{% block content %}{% endblock %}
+</main>
+
+<footer class="foot">
+  <div class="wrap foot__row">
+    <p class="foot__line">
+      {{ site_title }} — автоматическая витрина. Источник: <a href="https://www.gdeltproject.org/">GDELT GKG</a>,
+      отбор и оценка — свой пайплайн, тексты принадлежат изданиям-первоисточникам.
+    </p>
+    <p class="foot__line foot__meta">
+      Сборка {{ built }} · <a href="/about.html">о проекте</a> ·
+      <a href="https://freshrss.bhutyan.online">читалка</a>
+    </p>
+  </div>
+</footer>
+
+<script>window.__NAV__ = {{ nav|safe }};</script>
+<script src="/static/app.js" defer></script>
+</body>
+</html>
