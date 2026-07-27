@@ -63,3 +63,8 @@ typing_extensions==4.15.0
 tzlocal==5.4.4
 urllib3==2.7.0
 wheel==0.47.0
+flatbuffers==25.12.19
+onnx==1.22.0
+onnxruntime==1.28.0
+optimum==2.1.0
+protobuf==7.35.1
