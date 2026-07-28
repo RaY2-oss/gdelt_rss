@@ -255,9 +255,13 @@ def write_feed(fg, path):
     with open(path, "wb") as f:
         f.write(xml)
 
-    os.makedirs(settings.FEED_HTML_DIR, exist_ok=True)
-    twin = os.path.join(settings.FEED_HTML_DIR,
-                        os.path.basename(path)[:-len(".xml")] + ".html")
+    # Путь двойника считается ОТ пути XML, а не от своей настройки: тесты
+    # подменяют settings.OUTPUT_DIR на временный каталог, и вторая настройка
+    # мимо этой подмены писала бы прямо в боевой каталог (уже написала —
+    # india_digest.html из test_digest подменил живую страницу).
+    twin_dir = os.path.join(os.path.dirname(path), "html")
+    os.makedirs(twin_dir, exist_ok=True)
+    twin = os.path.join(twin_dir, os.path.basename(path)[:-len(".xml")] + ".html")
     xslt = etree.XSLT(etree.parse(_FEED_XSL))
     with open(twin, "wb") as f:
         f.write(bytes(xslt(etree.fromstring(xml))))

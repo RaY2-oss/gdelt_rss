@@ -18,9 +18,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("GDELT_RSS_DB") or os.path.join(BASE_DIR, "data", "feeds.db")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 OUTPUT_DIR = os.environ.get("GDELT_RSS_OUT", "/var/www/rss_feeds")  # nginx rss_proxy
-# HTML-двойник каждого фида для людей: nginx подменяет им .xml, когда запрос
-# пришёл из адресной строки браузера (см. feeds.write_feed).
-FEED_HTML_DIR = os.path.join(os.environ.get("GDELT_SITE_OUT", "/var/www/rss_site"), "feed")
 
 # e5 embedding model cache (own directory — no longer shared with digest).
 os.environ.setdefault("HF_HOME", os.path.join(BASE_DIR, ".cache", "huggingface"))
