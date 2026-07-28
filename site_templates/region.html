@@ -1,21 +1,22 @@
 {% extends "base.html" %}
-{% from "_story.html" import feed, legend, filter %}
+{% from "_story.html" import feed, legend, filter, dates %}
 {% set current_region = region.slug %}
 
 {% block title %}{{ region.name }} — {{ site_title }}{% endblock %}
-{% block description %}Наука и технологии: {{ region.name }}. {{ region.n }} сюжетов за сутки, ранжированы по важности.{% endblock %}
+{% block description %}Наука и технологии: {{ region.name }}. {{ region.n }} {{ region.n|plural('сюжет','сюжета','сюжетов') }} за неделю, по убыванию важности.{% endblock %}
 
 {% block content %}
 <section class="page wrap">
   <nav class="crumbs" aria-label="Хлебные крошки">
-    <a href="/">Лента</a> <span aria-hidden="true">/</span> <span>{{ region.name }}</span>
+    <a href="/">Главная</a> <span aria-hidden="true">/</span> <span>{{ region.name }}</span>
   </nav>
 
   <header class="page__head">
     <h1 class="page__title">{{ region.name }}</h1>
     <p class="page__note">
       {{ region.countries|length }} {{ (region.countries|length)|plural('страна','страны','стран') }},
-      {{ region.stories|length }} {{ (region.stories|length)|plural('сюжет','сюжета','сюжетов') }} за {{ status.window }} ч.
+      {{ region.stories|length }} {{ (region.stories|length)|plural('сюжет','сюжета','сюжетов') }}
+      за {{ status.days }} {{ status.days|plural('день','дня','дней') }}.
     </p>
   </header>
 
@@ -29,9 +30,10 @@
 
   <div class="board__head board__head--tight">
     {{ legend() }}
+    {{ dates(days) }}
     {{ filter('Тема, страна или издание') }}
   </div>
 
-  {{ feed(items, True, 'За сутки по этому региону ничего не набралось. Загляните на страницу отдельной страны — там окно шире.') }}
+  {{ feed(items, True, 'За неделю в регионе ничего не набралось.') }}
 </section>
 {% endblock %}

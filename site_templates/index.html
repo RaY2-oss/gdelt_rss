@@ -1,18 +1,18 @@
 {% extends "base.html" %}
-{% from "_story.html" import story, feed, legend, filter %}
+{% from "_story.html" import story, feed, legend, filter, dates %}
 
 {% block content %}
 {% if lead %}
 <section class="lead" style="--w: {{ lead.score }}" data-tier="{{ lead.tier }}">
   <div class="wrap lead__grid">
-    <div class="lead__gauge" title="Важность {{ lead.score }} из 100">
+    <div class="lead__gauge">
       <span class="lead__num">{{ lead.score }}</span>
-      <span class="lead__of">/100</span>
+      <span class="lead__cap">важность<b>из 100</b></span>
       <span class="lead__bar" aria-hidden="true"><i></i></span>
     </div>
 
     <div class="lead__body">
-      <p class="lead__eyebrow">Сильнейший сигнал за {{ status.window }} ч</p>
+      <p class="lead__eyebrow">Верх недели</p>
       <h1 class="lead__title">
         <a class="lead__link" href="{{ lead.url }}" rel="noopener nofollow" {% if lead.lang_code %}lang="{{ lead.lang_code }}"{% endif %}>{{ lead.title }}</a>
       </h1>
@@ -24,9 +24,9 @@
         <time datetime="{{ lead.iso }}">{{ lead.ago }}</time>
         {% if lead.translated %}<span>пер. с {{ lead.lang }}</span>{% endif %}
       </p>
-      {% if lead.entities %}
+      {% if lead_ents %}
       <ul class="lead__ents">
-        {% for e in lead.entities %}<li>{{ e|title }}</li>{% endfor %}
+        {% for e in lead_ents %}<li>{{ e }}</li>{% endfor %}
       </ul>
       {% endif %}
     </div>
@@ -38,35 +38,14 @@
   <div class="board__head">
     <h2 class="board__title">Лента</h2>
     <p class="board__note">
-      {{ total }} {{ total|plural('сюжет','сюжета','сюжетов') }} за {{ status.window }} ч, по убыванию важности.
-      Показаны первые {{ items|length + 1 }}.
+      {{ total }} {{ total|plural('сюжет','сюжета','сюжетов') }} за {{ status.days }} {{ status.days|plural('день','дня','дней') }} ·
+      показаны {{ items|length + 1 }} по убыванию важности
     </p>
     {{ legend() }}
+    {{ dates(days) }}
     {{ filter('Тема, страна или издание') }}
   </div>
 
-  {{ feed(items) }}
-</section>
-
-<section class="cover wrap">
-  <h2 class="cover__title">Весь охват</h2>
-  <p class="cover__note">89 стран в 10 регионах. Тон плашки — важность сильнейшего сюжета страны, число — сколько сюжетов в её ленте.</p>
-  <div class="cover__grid">
-    {% for r in regions %}
-    <section class="cover__region">
-      <h3 class="cover__name"><a href="/r/{{ r.slug }}.html">{{ r.name }}</a></h3>
-      <ul class="cover__list">
-        {% for c in r.countries %}
-        <li class="cover__cell" data-tier="{{ c.top|tier }}">
-          <a href="/c/{{ c.key }}.html">
-            <span class="cover__cname">{{ c.name }}</span>
-            <span class="cover__cnum">{{ c.n }}</span>
-          </a>
-        </li>
-        {% endfor %}
-      </ul>
-    </section>
-    {% endfor %}
-  </div>
+  {{ feed(items, True, 'За неделю ничего не набралось.', 2) }}
 </section>
 {% endblock %}

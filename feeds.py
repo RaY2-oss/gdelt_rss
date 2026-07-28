@@ -26,7 +26,6 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 from dateutil import parser as dtparser
 from feedgen.feed import FeedGenerator
-from lxml import etree
 
 import settings
 import db
@@ -37,9 +36,12 @@ import translate
 log = logging.getLogger("gdelt_rss")
 
 # Общая форма строки для фида, витрины и дайджеста — индексы совпадают во
-# всех трёх, иначе r[10]/r[11] означали бы в каждом своё.
+# всех трёх, иначе r[10]/r[11] означали бы в каждом своё. Русский перевод
+# (r[12]/r[13]) дописывает фоновый translate_worker; здесь он только читается,
+# и на показ идёт первым — ru > en > оригинал.
 _SELECT = ("SELECT url,title,text,publish_date,fetched_at,importance,embedding,"
-           "language,title_en,text_en,embedding_body,entities FROM articles ")
+           "language,title_en,text_en,embedding_body,entities,title_ru,text_ru "
+           "FROM articles ")
 
 _TOKEN_RE = re.compile(r"[^\w]+")
 _TOKEN_MIN_LEN = 4
@@ -184,7 +186,7 @@ def _pubdate(publish_date, fetched_at):
 
 
 def cluster_rows(rows, country):
-    """rows (12 колонок, см. _SELECT) -> {label: [строки сюжета]}.
+    """rows (14 колонок, см. _SELECT) -> {label: [строки сюжета]}.
 
     Общая для фида и витрины часть: одна и та же кластеризация должна давать
     одно и то же разбиение, иначе они показывают разные представители сюжета.
@@ -238,33 +240,17 @@ def _top_items(rows, country):
     return [max(groups[lab], key=lambda r: r[4] or "") for lab, _s in rank(groups)]
 
 
-_FEED_XSL = os.path.join(settings.BASE_DIR, "site_static", "feed.xsl")
-
-
 def write_feed(fg, path):
-    """XML для читалок плюс HTML-двойник для людей.
+    """XML для читалок — и только он.
 
-    По .xml браузер показывает голое дерево тегов, а <?xml-stylesheet?> дело
-    больше не спасает: Chrome 151 выкинул XSLT совсем и вместо страницы рисует
-    жёлтую плашку «browser does not support». Поэтому тот же feed.xsl
-    применяется здесь, на сборке, а nginx подставляет готовый HTML тем, кто
-    пришёл из адресной строки. Адрес не меняется — его можно скопировать и
-    подписаться, — а читалки получают ровно тот же XML, что и раньше.
+    Раньше рядом писался HTML-двойник (feed.xsl + подмена в nginx по
+    Sec-Fetch-Dest): человек, попавший на .xml из адресной строки, видел
+    страницу вместо дерева тегов. Витрина сделала его лишним — у каждой страны
+    есть своя страница, и вести туда правильнее, чем показывать фид под видом
+    сайта. Сами .xml остались как были: на них смотрят 178 подписок FreshRSS.
     """
-    xml = fg.rss_str(pretty=True)
     with open(path, "wb") as f:
-        f.write(xml)
-
-    # Путь двойника считается ОТ пути XML, а не от своей настройки: тесты
-    # подменяют settings.OUTPUT_DIR на временный каталог, и вторая настройка
-    # мимо этой подмены писала бы прямо в боевой каталог (уже написала —
-    # india_digest.html из test_digest подменил живую страницу).
-    twin_dir = os.path.join(os.path.dirname(path), "html")
-    os.makedirs(twin_dir, exist_ok=True)
-    twin = os.path.join(twin_dir, os.path.basename(path)[:-len(".xml")] + ".html")
-    xslt = etree.XSLT(etree.parse(_FEED_XSL))
-    with open(twin, "wb") as f:
-        f.write(bytes(xslt(etree.fromstring(xml))))
+        f.write(fg.rss_str(pretty=True))
 
 
 def build_country(conn, country):
@@ -288,12 +274,13 @@ def build_country(conn, country):
     fg.language("mul")
     for row in items:
         url, title, text, pdate, fa = row[0], row[1], row[2], row[3], row[4]
+        t_ru, x_ru = row[12], row[13]
         t_en, x_en = translated.get(url, (None, None))
         fe = fg.add_entry()
         fe.id(url)
         fe.link(href=url)
-        fe.title((t_en or title or url)[:300])
-        fe.content(x_en or text or "", type="CDATA")
+        fe.title((t_ru or t_en or title or url)[:300])
+        fe.content(x_ru or x_en or text or "", type="CDATA")
         fe.pubDate(_pubdate(pdate, fa))
     write_feed(fg, os.path.join(settings.OUTPUT_DIR, f"{country}.xml"))
     return len(items)

@@ -16,6 +16,7 @@
 В БД сборка пишет ровно одно: переводы своих представителей кластеров, в тот
 же кэш `articles.title_en/text_en`, которым пользуются фид и дайджест.
 """
+import hashlib
 import json
 import os
 import re
@@ -30,6 +31,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 import db
 import settings
 import translate
+import entity_ru
 import importance as imp
 import feeds
 from feeds import _pubdate
@@ -43,9 +45,21 @@ SITE_TITLE = "Bhutyan.online"
 SITE_TAGLINE = "Наука и технологии 89 стран Азии и Африки"
 FEED_BASE = "https://rss.bhutyan.online"
 
-HOME_LIMIT = 60        # сюжетов в ленте главной
-REGION_LIMIT = 80      # сюжетов на странице региона
-COUNTRY_MIN = 12       # меньше этого за сутки — расширяем окно страны
+# Окно витрины — вся неделя, что живёт в БД (settings.KEEP_HOURS), одно и то
+# же на главной, регионе и стране. Раньше было суточное, а страна с парой
+# заметок за сутки расширяла своё окно до недели — и лента главной вынужденно
+# исключала такие страны, иначе неделя мешалась с сутками в одном списке.
+# Теперь выбирать нечего: неделя лежит на странице целиком, а нужные даты
+# читатель отмечает сам (см. .days в _story.html и app.js).
+# Витрина показывает ровно неделю. KEEP_HOURS больше на сутки — этот запас
+# нужен графу дайджеста, а не витрине: «восемь дней» в подписи под лентой,
+# которая называется недельной, читается как опечатка.
+SITE_DAYS = min(7, settings.KEEP_HOURS // 24)
+SITE_HOURS = SITE_DAYS * 24
+
+HOME_LIMIT = 100       # сюжетов в ленте главной
+REGION_LIMIT = 120     # сюжетов на странице региона
+COUNTRY_LIMIT = 150    # сюжетов на странице страны
 ENTITY_TOP = 14        # субъектов в блоке «кто в новостях»
 
 # ── Гео-структура ───────────────────────────────────────────────────────────
@@ -159,9 +173,10 @@ IMPORTANT_AT = 50
 
 
 def _readable(row):
-    """Заголовок уже читается: перевод лежит в кэше или язык оригинала такой,
-    что переводить нечего (тот же список, по которому это решает translate)."""
-    return bool(row[8]) or (row[7] or "") in translate._SKIP_LANGS
+    """Заголовок уже читается: перевод лежит в кэше (русский от
+    translate_worker или английский) или язык оригинала такой, что переводить
+    нечего (тот же список, по которому это решает translate)."""
+    return bool(row[12] or row[8]) or (row[7] or "") in translate._SKIP_LANGS
 
 
 # ── Данные ──────────────────────────────────────────────────────────────────
@@ -297,7 +312,8 @@ def stories(conn, rows, country, now):
     out = []
     for lab, weight in ranked:
         members = groups[lab]
-        url, title, text, pdate, fetched, _llm, _e, lang, t_en, x_en, _be, ents = members[0]
+        (url, title, text, pdate, fetched, _llm, _e, lang, t_en, x_en, _be, ents,
+         t_ru, x_ru) = members[0]
         t_en, x_en = en.get(url, (t_en, x_en))
         sources, seen_domains = [], set()
         for m in members:
@@ -310,21 +326,26 @@ def stories(conn, rows, country, now):
         # 0-100 — только для показа, столбик и ступень тона считают по ней.
         score = round(weight * 100)
         head = sources[0]["domain"] if sources else ""
-        clean = _clean_title(t_en or title, head) or url
+        clean = _clean_title(t_ru or t_en or title, head) or url
         out.append({
             "url": url,
             "title": clean,
             # оригинал показываем, только если он реально другой (был перевод)
-            "orig_title": _clean_title(title, head) if t_en and title else "",
-            "snippet": _snippet(x_en or text, lead=clean),
+            "orig_title": _clean_title(title, head) if (t_ru or t_en) and title else "",
+            "snippet": _snippet(x_ru or x_en or text, lead=clean),
             "lang": RU_LANG.get(lang, lang or ""),
             # для атрибута lang= — иначе скринридер и подбор шрифта считают
-            # корейский заголовок русским текстом
-            "lang_code": (lang or "").strip(),
-            "translated": bool(t_en),
+            # корейский заголовок русским текстом. Показываем язык ТОГО, что
+            # реально в заголовке: русский перевод — язык страницы (пусто),
+            # английский — en, и только без перевода — язык оригинала.
+            "lang_code": "" if t_ru else ("en" if t_en else (lang or "").strip()),
+            "translated": bool(t_ru or t_en),
             "score": score,
             "tier": _tier(score),
             "iso": dt.isoformat(),
+            # день публикации в UTC — ключ, по которому строка попадает под
+            # отметку в полосе дат (.days). Тот же формат, что у ключей days().
+            "day": dt.strftime("%Y-%m-%d"),
             "ago": _ago(dt, now),
             "domain": sources[0]["domain"] if sources else "",
             "sources": sources[:8],
@@ -338,28 +359,41 @@ def stories(conn, rows, country, now):
     return out
 
 
-def country_data(conn, country, now):
-    """Сюжеты страны. Если за сутки почти пусто — расширяем окно до retention:
-    у части стран за 24 ч выходит две-три заметки, и пустая страница вместо
-    них — худшее, что можно показать."""
-    hours = settings.WINDOW_HOURS
-    rows = window_rows(conn, country, hours)
-    if len(rows) < COUNTRY_MIN:
-        wide = window_rows(conn, country, settings.KEEP_HOURS)
-        if len(wide) > len(rows):
-            rows, hours = wide, settings.KEEP_HOURS
-    return stories(conn, rows, country, now), hours
-
-
 def top_entities(items, limit=ENTITY_TOP):
     """Кто чаще всего фигурирует в сюжетах. Субъекты извлечены GKG
-    (`entities.py`), собственного словаря имён здесь нет."""
+    (`entities.py`) и лежат латиницей в нижнем регистре; русское имя им даёт
+    entity_ru — здесь только счёт."""
     counter = Counter()
     for s in items:
         for e in s["entities"]:
-            counter[e] += 1
-    return [{"name": name.title(), "n": n}
-            for name, n in counter.most_common(limit) if n > 1]
+            counter[e.strip()] += 1
+    return [(name, n) for name, n in counter.most_common(limit) if name and n > 1]
+
+
+DOW = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+
+
+def days(now, have=(), span=None):
+    """Полоса дат под ленту: последние span суток, свежая первой.
+
+    Из окна выбрасываются дни, за которые не набралось ни одного сюжета, —
+    но только с хвоста, чтобы полоса не рвалась дырами посередине. Витрина
+    бывает моложе своего окна: после чистой базы неделя пустых столбиков
+    выглядит поломкой прибора, а не показанием.
+
+    Даты публикации, вылетевшие за окно (в ленте попадаются статьи с датой
+    2015 года — так их разметил источник), в полосу не попадают: столбик
+    «одиннадцать лет назад» ничего не измеряет.
+    """
+    have = set(have)
+    out = []
+    for i in range(span or SITE_DAYS):
+        d = (now - timedelta(days=i)).date()
+        out.append({"key": d.isoformat(), "dow": DOW[d.weekday()],
+                    "dm": d.strftime("%d.%m")})
+    while len(out) > 1 and have and out[-1]["key"] not in have:
+        out.pop()
+    return out
 
 
 def pipeline_status(conn, now):
@@ -376,9 +410,12 @@ def pipeline_status(conn, now):
         "last_tick_iso": dt.isoformat(),
         # сбор идёт каждые 15 мин, оценка раз в час: старше 3 ч — это застой
         "live": age_h < 3,
+        # телеметрия конвейера — за сутки: это про «жив ли приём», а не про
+        # глубину витрины. Глубина витрины — SITE_DAYS, она в days.
         "scored": scored,
         "countries": countries,
         "window": settings.WINDOW_HOURS,
+        "days": SITE_DAYS,
     }
 
 
@@ -397,6 +434,19 @@ def _env():
     return env
 
 
+def _asset_v():
+    """Версия для ?v= у css/js. Имён с хэшем у этих файлов нет, а Cloudflare
+    держит /static/ час — без версии свежая разметка целый час встречалась бы
+    у посетителя со старой таблицей стилей. Хэш по содержимому, а не по времени
+    сборки: адрес меняется только когда меняется сам файл, поэтому часовой кэш
+    продолжает работать между сборками, где статика не трогалась."""
+    h = hashlib.sha1()
+    for name in ("style.css", "app.js", "fonts.css"):
+        with open(os.path.join(STATIC_DIR, name), "rb") as f:
+            h.update(f.read())
+    return h.hexdigest()[:8]
+
+
 def _write(path, content):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -408,20 +458,36 @@ def build(out_dir=OUT_DIR):
     now = datetime.now(timezone.utc)
     _translate_until = time.monotonic() + TRANSLATE_BUDGET_S
     env = _env()
+    entity_ru.reset_budget()
     conn = connect()
     try:
         status = pipeline_status(conn, now)
-        by_country, hours_by = {}, {}
-        for country in settings.COUNTRIES:
-            by_country[country], hours_by[country] = country_data(conn, country, now)
+        by_country = {c: stories(conn, window_rows(conn, c, SITE_HOURS), c, now)
+                      for c in settings.COUNTRIES}
+
+        # Общая лента: сюжеты всех стран за то же окно. Кросс-страновой дедуп
+        # не нужен — url это PRIMARY KEY, статья лежит ровно под одной страной.
+        everything = [s for items in by_country.values() for s in items]
+        everything.sort(key=lambda s: (s["score"], s["outlets"]), reverse=True)
+
+        # Русские имена субъектов — одним пакетом на всю сборку, а не по стране:
+        # имена повторяются между странами, и общий список даёт и кэшу, и пулу
+        # потоков полную загрузку (см. entity_ru).
+        tops = {c: top_entities(items) for c, items in by_country.items()}
+        wanted = {n for pairs in tops.values() for n, _k in pairs}
+        wanted.update(e.strip() for e in (everything[0]["entities"] if everything else []))
+        names_ru = entity_ru.translate_names(conn, sorted(wanted))
     finally:
         conn.close()
+
+    def ru_name(raw):
+        raw = raw.strip()
+        return names_ru.get(raw) or raw.title()
 
     regions = []
     for slug, name, countries in REGIONS:
         members = [c for c in countries if c in by_country]
-        pool = [s for c in members for s in by_country[c]
-                if hours_by[c] == settings.WINDOW_HOURS]
+        pool = [s for c in members for s in by_country[c]]
         pool.sort(key=lambda s: (s["score"], s["outlets"]), reverse=True)
         regions.append({
             # ключ НЕ "items": в шаблоне region.items резолвится в метод
@@ -433,22 +499,18 @@ def build(out_dir=OUT_DIR):
             "countries": [{
                 "key": c, "name": RU_COUNTRY.get(c, settings.country_display(c)),
                 "n": len(by_country[c]),
-                "fresh": hours_by[c] == settings.WINDOW_HOURS,
                 "top": by_country[c][0]["score"] if by_country[c] else 0,
             } for c in members],
             "n": sum(len(by_country[c]) for c in members),
         })
 
-    # Общая лента: сюжеты суточного окна со всех стран. Кросс-страновой дедуп
-    # не нужен — url это PRIMARY KEY, статья лежит ровно под одной страной.
-    everything = [s for c, items in by_country.items() for s in items
-                  if hours_by[c] == settings.WINDOW_HOURS]
-    everything.sort(key=lambda s: (s["score"], s["outlets"]), reverse=True)
-
     ctx = {
         "site_title": SITE_TITLE, "tagline": SITE_TAGLINE,
         "feed_base": FEED_BASE, "regions": regions, "status": status,
         "built": now.strftime("%d.%m.%Y %H:%M UTC"),
+        # полоса дат общая для всех страниц: колонки задаёт весь корпус, а
+        # высоты столбиков app.js считает по ленте конкретной страницы
+        "asset_v": _asset_v(), "days": days(now, {s["day"] for s in everything}),
         "nav": json.dumps(
             [{"n": RU_COUNTRY.get(c, settings.country_display(c)),
               "u": f"/c/{c}.html", "r": name}
@@ -457,9 +519,10 @@ def build(out_dir=OUT_DIR):
     }
 
     os.makedirs(out_dir, exist_ok=True)
+    lead = everything[0] if everything else None
     _write(os.path.join(out_dir, "index.html"),
            env.get_template("index.html").render(
-               lead=everything[0] if everything else None,
+               lead=lead, lead_ents=[ru_name(e) for e in lead["entities"]] if lead else [],
                items=everything[1:HOME_LIMIT], total=len(everything), **ctx))
 
     for region in regions:
@@ -474,11 +537,9 @@ def build(out_dir=OUT_DIR):
                    country_ru=RU_COUNTRY.get(country, settings.country_display(country)),
                    region=next((n for _s, n, cs in REGIONS if country in cs), ""),
                    region_slug=next((s for s, _n, cs in REGIONS if country in cs), ""),
-                   hours=hours_by[country], items=items,
-                   entities=top_entities(items), **ctx))
-
-    _write(os.path.join(out_dir, "about.html"),
-           env.get_template("about.html").render(**ctx))
+                   total=len(items), items=items[:COUNTRY_LIMIT],
+                   entities=[{"name": ru_name(n), "n": k} for n, k in tops[country]],
+                   **ctx))
 
     static_out = os.path.join(out_dir, "static")
     shutil.rmtree(static_out, ignore_errors=True)
@@ -530,10 +591,50 @@ def _selfcheck():
     assert _clean_title(None) == "" and _clean_title("  a  b ") == "a b"
 
     now = datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc)
+    # Полоса дат: свежая колонка первой, без повторов, максимум SITE_DAYS.
+    d = days(now)
+    assert len(d) == SITE_DAYS and d[0]["key"] == "2026-07-27", d[0]
+    assert d[0]["dow"] == "пн" and d[0]["dm"] == "27.07", d[0]
+    assert [x["key"] for x in d] == sorted((x["key"] for x in d), reverse=True)
+    assert len({x["key"] for x in d}) == SITE_DAYS
+    # Пустой хвост отрезается, дыра посередине — нет: день с нулём сюжетов
+    # внутри окна обязан остаться колонкой, иначе он исчезнет из фильтра.
+    d = days(now, {"2026-07-27", "2026-07-25"})
+    assert [x["key"] for x in d] == ["2026-07-27", "2026-07-26", "2026-07-25"], d
+    # даты публикации вне окна полосу не удлиняют и не схлопывают её в ноль
+    assert len(days(now, {"2015-05-07"})) == 1, days(now, {"2015-05-07"})
+
     assert _ago(now - timedelta(minutes=5), now) == "5 мин назад"
     assert _ago(now - timedelta(hours=3), now) == "3 ч назад"
     assert _ago(now - timedelta(days=2), now) == "2 дн назад"
     assert _ago(now + timedelta(hours=1), now) == "0 мин назад"  # будущая дата
+    # Версия статики должна быть стабильна между вызовами и меняться от
+    # содержимого — иначе ?v= либо не сбросит кэш, либо сбросит его каждый час.
+    v = _asset_v()
+    assert re.fullmatch(r"[0-9a-f]{8}", v), v
+    assert _asset_v() == v
+
+    # Русский перевод от translate_worker главнее английского кэша: ru > en >
+    # оригинал (тот же порядок в feeds.build_country и digest._write_feed).
+    # conn не нужен: строка уже читаема, переводчик не зовётся.
+    import numpy as np
+    vec = np.zeros(settings.EMBEDDING_DIM, np.float32); vec[0] = 1
+    def _row(t_ru, x_ru):
+        return ("http://kbs.co.kr/1", "한국 제목", "한국 본문", None, now.isoformat(),
+                settings.RELEVANT_SCORE, vec.tobytes(), "ko", "Korean title",
+                "Korean body", None, "", t_ru, x_ru)
+    [s] = stories(None, [_row("Корейский заголовок", "Корейский текст.")], "south_korea", now)
+    assert s["title"] == "Корейский заголовок", s["title"]
+    assert s["snippet"].startswith("Корейский текст"), s["snippet"]
+    assert s["orig_title"] == "한국 제목" and s["translated"]
+    assert s["lang_code"] == "", s["lang_code"]      # русский = язык страницы
+    # day должен совпадать по формату с ключами days(), иначе полоса дат
+    # молча не найдёт ни одной строки и покажет нули по всей неделе.
+    assert s["day"] == now.strftime("%Y-%m-%d") == days(now)[0]["key"], s["day"]
+    [s] = stories(None, [_row(None, None)], "south_korea", now)
+    assert s["title"] == "Korean title" and s["lang_code"] == "en"
+
+    entity_ru._selfcheck()
     print("site selfcheck ok")
 
 

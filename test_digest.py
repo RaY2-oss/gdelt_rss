@@ -26,10 +26,10 @@ def _v(seed):
     return v
 
 
-def _row(url, score, vec, ents=""):
-    """12 колонок feeds._SELECT — форма строки у фида, витрины и дайджеста одна."""
+def _row(url, score, vec, ents="", t_ru=None, x_ru=None):
+    """14 колонок feeds._SELECT — форма строки у фида, витрины и дайджеста одна."""
     return (url, "t", "x", None, NOW, score, vec.tobytes(), "en", None, None,
-            vec.tobytes(), ents)
+            vec.tobytes(), ents, t_ru, x_ru)
 
 
 def _cluster_imp(clusters, ent_df):
@@ -98,7 +98,8 @@ def test_entity_factor_lifts_national_story():
     assert got[0] > got[1], got
 
 
-def test_only_todays_articles_are_candidates():
+def test_one_entry_per_cluster_across_days():
+    """Сюжет, растянутый на несколько дней, — одна запись, а не одна на день."""
     db.init()
     conn = db.connect()
     v = _v(1)
@@ -115,7 +116,22 @@ def test_only_todays_articles_are_candidates():
     conn.commit()
     n = digest.build_country_digest(conn, "india", day=TODAY)
     conn.close()
-    assert n == 1, "кластер без сегодняшней статьи не должен размножать дайджест"
+    assert n == 1, "один сюжет — одна запись, сколько бы дней он ни длился"
+
+
+def test_older_story_without_fresh_article_still_qualifies():
+    """Недельный выпуск берёт и то, что случилось в понедельник: гейт «есть
+    статья именно за сегодня» был у дневного дайджеста и снят вместе с ним."""
+    db.init()
+    conn = db.connect()
+    conn.execute("INSERT INTO articles (url,country,fetched_at,publish_date,title,text,"
+                 "language,title_hash,embedding,importance) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                 ("http://x/old-only", "nepal", NOW, YDAY, "старый сюжет", "тело",
+                  "ru", "hold", _v(5).tobytes(), 60))
+    conn.commit()
+    n = digest.build_country_digest(conn, "nepal", day=TODAY)
+    conn.close()
+    assert n == 1, "сюжет без сегодняшней статьи обязан попасть в недельный выпуск"
 
 
 def test_cross_day_no_repeat():
@@ -171,21 +187,20 @@ def test_mmr_prefers_diverse_over_near_duplicate():
     assert urls == ["a", "c"], "MMR должен предпочесть разнообразие дублю с похожей важностью"
 
 
-def test_daily_digest_defaults_to_previous_day():
-    """Регресс на пустой _important: cron дёргает daily_digest.py в 00:00 UTC,
-    когда сегодняшний день ещё пуст — день по умолчанию обязан быть вчерашним,
-    иначе build_country_digest не находит ни одного кандидата (см. digest.py,
-    шаг 4: в дайджест идут только статьи с датой == day)."""
+def test_weekly_digest_defaults_to_today():
+    """day — только метка выпуска: окно берётся за DIGEST_GRAPH_DAYS назад, и
+    вчерашняя дата по умолчанию (наследство дневного дайджеста) теперь просто
+    сдвигала бы подпись выпуска на день назад."""
     import subprocess, sys, os
-    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "daily_digest.py")
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weekly_digest.py")
     out = subprocess.run(
         [sys.executable, "-c",
-         "import sys, runpy; sys.argv=['daily_digest.py'];"
+         "import sys, runpy; sys.argv=['weekly_digest.py'];"
          "import digest; digest.build_all=lambda day=None: print('DAY', day);"
          "import db; db.init=lambda: None;"
          f"runpy.run_path({src!r}, run_name='__main__')"],
         capture_output=True, text=True, cwd=os.path.dirname(src))
-    assert f"DAY {YDAY}" in out.stdout, out.stdout + out.stderr
+    assert f"DAY {TODAY}" in out.stdout, out.stdout + out.stderr
 
 
 if __name__ == "__main__":

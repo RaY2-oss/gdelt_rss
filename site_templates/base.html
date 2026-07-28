@@ -4,30 +4,51 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}{{ site_title }}{% endblock %}</title>
-<meta name="description" content="{% block description %}{{ tagline }}. Лента ранжируется автоматически: каждому сюжету присвоена важность 0–100.{% endblock %}">
+<meta name="description" content="{% block description %}{{ tagline }}. Порядок в ленте считает алгоритм: у каждого сюжета важность от 0 до 100.{% endblock %}">
 <meta name="color-scheme" content="light dark">
 <link rel="preload" href="/static/fonts/GolosText-900-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/static/fonts.css">
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/fonts.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/style.css?v={{ asset_v }}">
 <link rel="icon" href="/static/mark.svg" type="image/svg+xml">
 {% block head %}{% endblock %}
 <script>
-  // До первой отрисовки, иначе тёмная тема моргнёт белым.
+  // До первой отрисовки, иначе тёмная тема моргнёт белым, а открытый атлас
+  // въедет заново на каждой странице.
   try {
     var t = localStorage.getItem('theme');
     if (t) document.documentElement.dataset.theme = t;
+    if (localStorage.getItem('atlas') === '1' &&
+        matchMedia('(min-width: 64rem)').matches)
+      document.documentElement.className += ' is-atlas';
   } catch (e) {}
 </script>
 </head>
-<body>
+<body{% if current_region %} data-region="{{ current_region }}"{% endif %}>
 <a class="skip" href="#main">К содержимому</a>
 
+{# Шапка в одну строку. Раньше их было три: знак с поиском, полоса регионов и
+   полоса приёма — сто пятьдесят пикселей, из которых работала одна ссылка.
+   Регионы и страны ушли в «Атлас» (он же и есть карта охвата), телеметрия — в
+   подвал, а здесь остался пульс приёма: единственное, что меняется от минуты
+   к минуте и потому обязано быть на виду. #}
 <header class="top">
   <div class="top__bar wrap">
-    <a class="mark" href="/">
+    <button class="atlas-btn" type="button" aria-controls="atlas" aria-expanded="false">
+      <span class="atlas-btn__bars" aria-hidden="true"></span>
+      <span class="atlas-btn__word">Атлас</span>
+    </button>
+
+    <a class="mark" href="/" title="На главную">
       <span class="mark__glyph" aria-hidden="true"></span>
       <span class="mark__word">Bhutyan<span class="mark__tld">.online</span></span>
     </a>
+
+    <span class="top__live{% if not status.live %} is-stale{% endif %}"
+          title="Когда пришла последняя статья">
+      <span class="top__pulse" aria-hidden="true"></span>
+      <span class="top__word">{{ 'приём' if status.live else 'тишина' }}</span>
+      <b>{{ status.last_tick }}</b>
+    </span>
 
     <form class="jump" role="search" onsubmit="return false">
       <label class="jump__label" for="jump">Страна</label>
@@ -40,33 +61,6 @@
       <span class="theme__dot" aria-hidden="true"></span>
     </button>
   </div>
-
-  {# Регионы — своя строка: десять русских названий не влезают в одну строку
-     с логотипом и поиском, а обрезка навигации хуже лишних 34 пикселей. #}
-  <nav class="regions" aria-label="Регионы">
-    <div class="wrap regions__row">
-      {% for r in regions %}
-      {% if loop.first or r.part != regions[loop.index0 - 1].part %}
-      <span class="regions__part" aria-hidden="true">{{ r.part }}</span>
-      {% endif %}
-      <a class="regions__item{% if r.slug == current_region %} is-current{% endif %}"
-         href="/r/{{ r.slug }}.html" title="{{ r.name }}">{{ r.short }}</a>
-      {% endfor %}
-    </div>
-  </nav>
-
-  <div class="status">
-    <div class="wrap status__row">
-      <span class="status__live{% if not status.live %} is-stale{% endif %}">
-        <span class="status__pulse" aria-hidden="true"></span>
-        {{ 'приём' if status.live else 'застой' }}
-      </span>
-      <span class="status__cell"><b>{{ status.last_tick }}</b> последняя статья</span>
-      <span class="status__cell"><b>{{ status.countries }}</b> {{ status.countries|plural('страна','страны','стран') }} на связи</span>
-      <span class="status__cell"><b>{{ status.scored }}</b> {{ status.scored|plural('статья','статьи','статей') }} за {{ status.window }} ч</span>
-      <a class="status__cell status__link" href="/about.html">как это устроено</a>
-    </div>
-  </div>
 </header>
 
 <main id="main">
@@ -75,18 +69,65 @@
 
 <footer class="foot">
   <div class="wrap foot__row">
-    <p class="foot__line">
-      {{ site_title }} — автоматическая витрина. Источник: <a href="https://www.gdeltproject.org/">GDELT GKG</a>,
-      отбор и оценка — свой пайплайн, тексты принадлежат изданиям-первоисточникам.
+    <p class="foot__line foot__tele">
+      <span class="foot__cell"><b>{{ status.countries }}</b> {{ status.countries|plural('страна','страны','стран') }} на связи</span>
+      <span class="foot__cell"><b>{{ status.scored }}</b> {{ status.scored|plural('статья','статьи','статей') }} за {{ status.window }} ч</span>
+      <span class="foot__cell">глубина ленты <b>{{ status.days }}</b> {{ status.days|plural('день','дня','дней') }}</span>
+      <span class="foot__cell">сборка {{ built }}</span>
     </p>
-    <p class="foot__line foot__meta">
-      Сборка {{ built }} · <a href="/about.html">о проекте</a> ·
+    <p class="foot__line">
+      Источник: <a href="https://www.gdeltproject.org/">GDELT GKG</a> · права на тексты — у изданий ·
       <a href="https://freshrss.bhutyan.online">читалка</a>
     </p>
   </div>
 </footer>
 
+{# Атлас. Открывается с любой страницы и сдвигает её вбок, а не накрывает:
+   так видно, откуда ушёл и куда возвращаешься. На узком экране сдвигать
+   некуда — там он ложится поверх. #}
+<aside class="atlas" id="atlas" aria-label="Атлас" aria-hidden="true">
+  <div class="atlas__inner">
+    <div class="atlas__head">
+      <a class="atlas__home" href="/">
+        <span class="atlas__homeword">Главная лента</span>
+        <span class="atlas__homenote">всё вместе, по важности</span>
+      </a>
+      <button class="atlas__close" type="button" aria-label="Закрыть атлас">×</button>
+    </div>
+
+    {% set n_countries = regions|map(attribute='countries')|map('length')|sum %}
+    <p class="atlas__note">
+      {{ n_countries }} {{ n_countries|plural('страна','страны','стран') }},
+      {{ regions|length }} {{ regions|length|plural('регион','региона','регионов') }}.
+      Заливка — важность верхнего сюжета, число — сколько сюжетов за
+      {{ status.days }} {{ status.days|plural('день','дня','дней') }}.
+    </p>
+
+    <div class="atlas__grid">
+      {% for r in regions %}
+      <section class="atlas__region">
+        <h2 class="atlas__name">
+          <a href="/r/{{ r.slug }}.html"{% if r.slug == current_region %} class="is-current"{% endif %}>{{ r.name }}</a>
+          <b>{{ r.n }}</b>
+        </h2>
+        <ul class="atlas__list">
+          {% for c in r.countries %}
+          <li class="atlas__cell" data-tier="{{ c.top|tier }}">
+            <a href="/c/{{ c.key }}.html">
+              <span class="atlas__cname">{{ c.name }}</span>
+              <span class="atlas__cnum">{{ c.n }}</span>
+            </a>
+          </li>
+          {% endfor %}
+        </ul>
+      </section>
+      {% endfor %}
+    </div>
+  </div>
+</aside>
+<div class="atlas__scrim" hidden></div>
+
 <script>window.__NAV__ = {{ nav|safe }};</script>
-<script src="/static/app.js" defer></script>
+<script src="/static/app.js?v={{ asset_v }}" defer></script>
 </body>
 </html>

@@ -72,16 +72,16 @@ def _chunks(text):
     return parts or [text]
 
 
-def _translate(text, source="auto"):
+def _translate(text, source="auto", target="en"):
     if not text:
         return None
     for attempt in range(2):
         try:
-            tr = GoogleTranslator(source=source, target="en")
+            tr = GoogleTranslator(source=source, target=target)
             return " ".join(tr.translate(c) for c in _chunks(text))
         except LanguageNotSupportedException:
             # неизвестный deep-translator код — откат на auto-детект
-            return _translate(text, "auto") if source != "auto" else None
+            return _translate(text, "auto", target) if source != "auto" else None
         except Exception as exc:
             # ponytail: один ретрай на троттлинг Google при пакетной сборке
             # (89 стран x TRANSLATE_WORKERS). Не помог — вернём None, NULL
@@ -91,6 +91,18 @@ def _translate(text, source="auto"):
                 continue
             log.debug("Google Translate fail (%s): %s", source, exc)
             return None
+
+
+def to_ru(title, text):
+    """Второе плечо: английский → русский, тем же Google.
+
+    Локальные модели идут int8 на процессоре без AVX и на именах собственных
+    выдумывают («Jantar Mantar» → «Партия тараканов Джанта»), а суточную
+    очередь в тысячи статей не разбирают в принципе: тридцать штук за прогон.
+    Google на том же тексте и точнее, и в полсотни раз быстрее. Модели
+    остаются запасным маршрутом — на случай, когда Google не ответил.
+    """
+    return _translate(title, "en", "ru"), _translate(text, "en", "ru")
 
 
 def translate_missing(conn, rows):

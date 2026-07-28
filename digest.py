@@ -1,30 +1,33 @@
 # -*- coding: utf-8 -*-
-"""digest.py — дневной дайджест: топ сюжетов дня по важности с учётом
-7-дневного графа и защитой от повторов между дайджестами.
+"""digest.py — недельный дайджест: топ сюжетов недели по важности с защитой
+от повторов между дайджестами.
 
-Идея: важность и MMR-диверсити считаются по окну DIGEST_GRAPH_DAYS (сюжет,
-набирающий обороты несколько дней подряд, "дозревает" до дайджеста — даже
-если в день события вышла всего одна статья), но кандидатом в САМ дайджест
-дня может быть только сюжет, у которого есть статья, впервые увиденная
-именно в этот день (иначе тот же сюжет попадал бы в дайджест каждый день,
-пока держится в 7-дневном окне).
+Дневного дайджеста больше нет. Витрина сортирует ленту по структурной
+важности сама и делает это ежечасно — второй раз отбирать «главное за день»
+незачем. Осталось то, чего лента не даёт: срез за неделю, где сюжет,
+набиравший обороты пять дней подряд, стоит выше однодневной вспышки.
 
 Шаги на страну:
-    1. articles за 7 дней, прошедшие гейт релевантности, — граф сюжетов.
+    1. articles за DIGEST_GRAPH_DAYS дней, прошедшие гейт релевантности.
     2. кластеризация e5-косинусом (feeds.cluster_rows) — один кластер = один
        сюжет, растянутый на несколько дней.
     3. важность кластера — структурная (feeds.rank -> importance.structural):
        LexRank по эмбеддингам тел + охват по РАЗНЫМ доменам + вес субъектов.
        Оценка LLM в ней не участвует: она двоичная, «по теме или нет».
-    4. кластер участвует в дайджесте ТОЛЬКО если среди его статей есть хотя
-       бы одна, вышедшая сегодня; представитель — самая свежая из сегодняшних.
+    4. представитель кластера — самая свежая его статья. Гейта «есть статья
+       именно за сегодня» больше нет: он существовал ровно для того, чтобы
+       один сюжет не попадал в дайджест семь дней подряд, а у недельного
+       выпуска эту работу делает дедуп по digest_sent.
     5. кластеры, чей представитель косинусно совпадает с уже отправленным
        ранее (digest_sent), отбрасываются — не повторяем сюжет.
     6. MMR по оставшимся кандидатам (важность кластера vs похожесть на уже
-       выбранное в этом дайджесте) — top-N, без дублей внутри самого дня.
+       выбранное в этом выпуске) — top-N, без дублей внутри самой недели.
     7. перевод отобранных статей на английский (кроме уже ru/en — см.
        translate.translate_missing), затем запись {country}_digest.xml +
        фиксация выбранного в digest_sent.
+
+Имя файла осталось прежним ({country}_digest.xml): на него смотрят подписки
+FreshRSS, и переименование стоило бы 89 переподписок ради нуля пользы.
 """
 import logging
 import os
@@ -42,13 +45,15 @@ from feeds import _pubdate, _mmr_select, _max_cosine  # переиспользу
 
 log = logging.getLogger("gdelt_rss")
 
-
-def _row_date(row):
-    """row: 12 колонок, см. feeds._SELECT."""
-    return _pubdate(row[3], row[4]).date().isoformat()
+# Выпуск теперь недельный, а не суточный: settings.TOP_N рассчитан на день и
+# на неделю даёт три сюжета в сутки. Полтора десятка сверху — не «побольше
+# всего», а тот же охват при семикратном окне.
+WEEK_TOP_N = settings.TOP_N + 15
 
 
 def build_country_digest(conn, country, day=None):
+    """day — дата выпуска (метка в описании фида и в digest_sent), окно всегда
+    последние DIGEST_GRAPH_DAYS дней."""
     day_str = day or datetime.now(timezone.utc).date().isoformat()
     graph_since = (datetime.now(timezone.utc) -
                    timedelta(days=settings.DIGEST_GRAPH_DAYS)).isoformat()
@@ -80,12 +85,9 @@ def build_country_digest(conn, country, day=None):
 
     candidates = []
     for lab, cluster_rows in clusters.items():
-        today_rows = [r for r in cluster_rows if _row_date(r) == day_str]
-        if not today_rows:
-            continue  # сюжет без публикаций сегодня — не в этот дайджест
         # Внутри кластера это один сюжет, а оценка LLM теперь двоичная и
-        # представителя не выбирает — берём самую свежую статью дня.
-        rep = max(today_rows, key=lambda r: r[4] or "")
+        # представителя не выбирает — берём самую свежую статью недели.
+        rep = max(cluster_rows, key=lambda r: r[4] or "")
         rep_emb = imp.body_emb(rep[10], rep[6])
         if _max_cosine(rep_emb, sent_embs) >= settings.DEDUP_COSINE:
             continue  # уже был в одном из прошлых дайджестов
@@ -94,9 +96,10 @@ def build_country_digest(conn, country, day=None):
             "pdate": rep[3], "fa": rep[4],
             "imp": cluster_imp[lab], "emb": rep_emb,
             "language": rep[7], "title_en": rep[8], "text_en": rep[9],
+            "title_ru": rep[12], "text_ru": rep[13],
         })
 
-    picked = _mmr_select(candidates, settings.TOP_N)
+    picked = _mmr_select(candidates, WEEK_TOP_N)
     picked.sort(key=lambda c: c["imp"], reverse=True)
     translated = {}
     if picked:
@@ -107,7 +110,7 @@ def build_country_digest(conn, country, day=None):
                     c["title_en"], c["text_en"]) for c in picked])
         _record_sent(conn, country, day_str, picked)
 
-    # Пишем всегда, даже пустой. «Сегодня в этой стране ничего не набралось» —
+    # Пишем всегда, даже пустой. «За неделю в этой стране ничего не набралось» —
     # это ответ, и для подписки он выглядит как 200 с нулём записей. Раньше
     # файла просто не было, и 43 фида висели в FreshRSS в ошибке постоянно:
     # красный флаг переставал что-либо значить.
@@ -118,18 +121,19 @@ def build_country_digest(conn, country, day=None):
 def _write_feed(country, day_str, picked, translated):
     disp = settings.country_display(country)
     fg = FeedGenerator()
-    fg.title(f"GDELT Sci/Tech Daily Digest — {disp}")
+    fg.title(f"GDELT Sci/Tech Weekly Digest — {disp}")
     fg.link(href="https://data.gdeltproject.org/", rel="alternate")
-    fg.description(f"Дневной дайджест {day_str}: топ-{settings.TOP_N} сюжетов по "
-                    f"важности (7-дневный граф), без повторов с прошлыми дайджестами.")
+    fg.description(f"Недельный дайджест на {day_str}: топ-{WEEK_TOP_N} сюжетов по "
+                    f"важности за {settings.DIGEST_GRAPH_DAYS} дней, без повторов "
+                    f"с прошлыми выпусками.")
     fg.language("mul")
     for c in picked:
         t_en, x_en = translated.get(c["url"], (None, None))
         fe = fg.add_entry()
         fe.id(c["url"])
         fe.link(href=c["url"])
-        fe.title((t_en or c["title"] or c["url"])[:300])
-        fe.content(x_en or c["text"] or "", type="CDATA")
+        fe.title((c["title_ru"] or t_en or c["title"] or c["url"])[:300])
+        fe.content(c["text_ru"] or x_en or c["text"] or "", type="CDATA")
         fe.pubDate(_pubdate(c["pdate"], c["fa"]))
     feeds.write_feed(fg, os.path.join(settings.OUTPUT_DIR, f"{country}_digest.xml"))
 
@@ -152,7 +156,7 @@ def build_all(day=None):
             total += n
             if n:
                 log.info("  дайджест %s: %d сюжетов", country, n)
-        log.info("Дневной дайджест собран: %d стран, %d сюжетов всего",
+        log.info("Недельный дайджест собран: %d стран, %d сюжетов всего",
                  len(settings.COUNTRIES), total)
         return total
     finally:

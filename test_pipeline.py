@@ -228,10 +228,10 @@ def test_score_propagates_verdict_to_duplicate_group_in_seen_urls():
     assert verdicts["http://d/3"] == "rejected"
 
 
-def _feed_row(url, title, vec, fetched, entities_cell=""):
-    """Строка в форме feeds._SELECT (12 колонок)."""
+def _feed_row(url, title, vec, fetched, entities_cell="", t_ru=None, x_ru=None):
+    """Строка в форме feeds._SELECT (14 колонок)."""
     return (url, title, "t", None, fetched, settings.RELEVANT_SCORE, vec.tobytes(),
-            "en", None, None, None, entities_cell)
+            "en", None, None, None, entities_cell, t_ru, x_ru)
 
 
 def test_cluster_dedups_and_ranks_by_coverage():

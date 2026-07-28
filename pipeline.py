@@ -258,10 +258,34 @@ def _title_hash(title):
     return hashlib.sha1(norm.encode()).hexdigest() if norm else None
 
 
+# Письменность важнее langdetect. Проверено на боевой базе: из 1811 статей с
+# меткой "ko" в 1296 (72%) нет ни одного символа хангыля — это китайский,
+# langdetect путает их системно. Хангыль -> ko, кана -> ja, иероглифы без них
+# -> zh-cn. Тот же приём уже был в translate.py::_src, здесь он поднят на
+# уровень записи в БД, чтобы колонка language перестала копить мусор.
+_SC_HANGUL = re.compile(r"[\uac00-\ud7af]")
+_SC_KANA = re.compile(r"[\u3040-\u30ff]")
+_SC_HAN = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _script_lang(s):
+    """Язык по письменности или None, если письменность неразличима."""
+    if _SC_HANGUL.search(s):
+        return "ko"
+    if _SC_KANA.search(s):
+        return "ja"
+    if _SC_HAN.search(s):
+        return "zh-cn"
+    return None
+
+
 def _detect_lang(text):
     s = re.sub(r"\s+", " ", (text or "").strip())[:2000]
     if len(s) < 80:
         return None
+    hard = _script_lang(s)
+    if hard:
+        return hard
     try:
         return detect(s)
     except (LangDetectException, Exception):

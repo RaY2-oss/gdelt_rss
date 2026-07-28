@@ -1,64 +1,106 @@
-{# Одна строка ленты. --w = важность в процентах: длина столбика и ступень
-   тона кодируют одну и ту же величину, число рядом — прямая подпись к ней. #}
-{% macro story(s, show_country=True, i=0) %}
+{# Одна строка ленты.
+
+   --w = важность в процентах: она же длина фонового столбика строки. Столбик
+   больше не обрывается ровно на своей отметке — он гаснет за ней (см.
+   .story::before в style.css): граница важности стала менее очевидной, зато
+   исчез частокол вертикальных срезов посреди ленты.
+
+   Слева — порядковый номер, а не отсчёт важности: «96» рядом с первой строкой
+   читалось как номер и сбивало. Сама важность подписана словом и стоит в
+   строке выходных данных, где её не спутать ни с чем. #}
+{% macro story(s, show_country=True, i=0, no=1) %}
 <article class="story" style="--w: {{ s.score }}; --i: {{ i if i < 20 else 20 }}" data-tier="{{ s.tier }}"
-         data-score="{{ s.score }}"
+         data-score="{{ s.score }}" data-day="{{ s.day }}"
          data-find="{{ s.title|lower }} {{ s.country_ru|lower }} {{ s.domain }}">
-  <div class="story__sig" title="Важность {{ s.score }} из 100 — сколько изданий написали, насколько сюжет связан с остальной лентой страны и кто в нём фигурирует">
-    <span class="story__bar" aria-hidden="true"></span>
-    <span class="story__score">{{ s.score }}</span>
+  <div class="story__sig">
+    <span class="story__no">{{ no }}</span>
   </div>
 
-  <h3 class="story__title">
-    <a class="story__link" href="{{ s.url }}" rel="noopener nofollow" {% if s.lang_code %}lang="{{ s.lang_code }}"{% endif %}>{{ s.title }}</a>
-  </h3>
+  <div class="story__body">
+    <h3 class="story__title">
+      <a class="story__link" href="{{ s.url }}" rel="noopener nofollow" {% if s.lang_code %}lang="{{ s.lang_code }}"{% endif %}>{{ s.title }}</a>
+    </h3>
 
-  <p class="story__meta">
-    {% if show_country %}<a class="story__country" href="/c/{{ s.country }}.html">{{ s.country_ru }}</a>{% endif %}
-    <span class="story__source">{{ s.domain }}</span>
-    {% if s.outlets > 1 %}
-    <span class="story__outlets" title="Столько разных изданий написали об этом сюжете">{{ s.outlets }} {{ s.outlets_word }}</span>
+    <p class="story__meta">
+      <span class="story__imp" title="Важность {{ s.score }} из 100">
+        <i class="story__impbar" aria-hidden="true"></i>важность <b>{{ s.score }}</b>
+      </span>
+      {% if show_country %}<a class="story__country" href="/c/{{ s.country }}.html">{{ s.country_ru }}</a>{% endif %}
+      <span class="story__source">{{ s.domain }}</span>
+      {% if s.outlets > 1 %}<span class="story__outlets">{{ s.outlets }} {{ s.outlets_word }}</span>{% endif %}
+      <time class="story__time" datetime="{{ s.iso }}">{{ s.ago }}</time>
+      {# язык у части статей не определился — тогда просто «перевод», без «пер. с » в никуда #}
+      {% if s.translated %}<span class="story__tag">{{ 'пер. с ' ~ s.lang if s.lang else 'перевод' }}</span>
+      {% elif s.lang %}<span class="story__tag story__tag--plain">{{ s.lang }}</span>{% endif %}
+    </p>
+
+    {% if s.snippet %}<p class="story__snippet" {% if not s.translated and s.lang_code %}lang="{{ s.lang_code }}"{% endif %}>{{ s.snippet }}</p>{% endif %}
+
+    {% if s.sources|length > 1 %}
+    <details class="story__more">
+      <summary class="story__summary">Ещё {{ (s.sources|length) - 1 }} {{ ((s.sources|length) - 1)|plural('источник','источника','источников') }}</summary>
+      <ul class="story__sources">
+        {% for src in s.sources[1:] %}
+        <li><a href="{{ src.url }}" rel="noopener nofollow">{{ src.domain }}</a></li>
+        {% endfor %}
+      </ul>
+    </details>
     {% endif %}
-    <time class="story__time" datetime="{{ s.iso }}">{{ s.ago }}</time>
-    {# язык у части статей не определился — тогда просто «перевод», без «пер. с » в никуда #}
-    {% if s.translated %}<span class="story__tag" title="Заголовок и текст переведены с языка оригинала">{{ 'пер. с ' ~ s.lang if s.lang else 'перевод' }}</span>
-    {% elif s.lang %}<span class="story__tag story__tag--plain">{{ s.lang }}</span>{% endif %}
-  </p>
-
-  {% if s.snippet %}<p class="story__snippet" {% if not s.translated and s.lang_code %}lang="{{ s.lang_code }}"{% endif %}>{{ s.snippet }}</p>{% endif %}
-
-  {% if s.sources|length > 1 %}
-  <details class="story__more">
-    <summary class="story__summary">Ещё {{ (s.sources|length) - 1 }} {{ ((s.sources|length) - 1)|plural('источник','источника','источников') }}</summary>
-    <ul class="story__sources">
-      {% for src in s.sources[1:] %}
-      <li><a href="{{ src.url }}" rel="noopener nofollow">{{ src.domain }}</a></li>
-      {% endfor %}
-    </ul>
-  </details>
-  {% endif %}
+  </div>
 </article>
 {% endmacro %}
 
 
-{# Легенда шкалы. Один раз над лентой — иначе число 0–100 ничего не значит. #}
+{# Ось шкалы над лентой. Ширина оси равна ширине ленты: длина строки и деление
+   под ней — одна и та же координата. #}
 {% macro legend() %}
-<div class="legend">
-  <span class="legend__label">Важность</span>
-  <span class="legend__ramp" aria-hidden="true">
-    {% for t in range(5) %}<i data-tier="{{ t }}"></i>{% endfor %}
-  </span>
-  <span class="legend__ends"><b>0</b> одиночная заметка — <b>100</b> главный сюжет дня</span>
+<div class="axis">
+  <span class="axis__label">Важность сюжета</span>
+  <span class="axis__ramp" aria-hidden="true"></span>
+  <span class="axis__nums" aria-hidden="true"><b>0</b><b>25</b><b>50</b><b>75</b><b>100</b></span>
 </div>
 {% endmacro %}
 
 
-{% macro feed(items, show_country=True, empty='За выбранное окно ничего не набралось.') %}
+{# Полоса дат. Одновременно и фильтр, и график: высота столбика — сколько
+   сюжетов вышло в этот день, так что видно и провалы недели, и то, что
+   отрезаешь. Считает высоты app.js по самой ленте — цифра под столбиком и
+   число строк после фильтра не могут разойтись по определению.
+
+   Управление: клик — один день, протяжка — диапазон, повторный клик по
+   одиночному дню — снова вся неделя. #}
+{% macro dates(days) %}
+<div class="days" data-days>
+  <div class="days__top">
+    <span class="days__label">Даты публикации</span>
+    <span class="days__hint">клик — день, протяжка — период</span>
+    <button class="days__reset" type="button" data-days-reset hidden>вся неделя</button>
+  </div>
+  <ol class="days__row">
+    {% for d in days|reverse %}
+    <li class="days__col">
+      <button class="days__btn is-on" type="button" data-day="{{ d.key }}"
+              aria-pressed="true" title="{{ d.dow }}, {{ d.dm }}">
+        <span class="days__n" aria-hidden="true"></span>
+        <span class="days__bar" aria-hidden="true"><i></i></span>
+        <span class="days__dow">{{ d.dow }}</span>
+        <span class="days__dm">{{ d.dm }}</span>
+      </button>
+    </li>
+    {% endfor %}
+  </ol>
+</div>
+{% endmacro %}
+
+
+{% macro feed(items, show_country=True, empty='За неделю ничего не набралось.', start=1) %}
 {% if items %}
 <div class="feed" id="feed">
-  {% for s in items %}{{ story(s, show_country, loop.index0) }}{% endfor %}
+  {% for s in items %}{{ story(s, show_country, loop.index0, loop.index0 + start) }}{% endfor %}
 </div>
-<p class="feed__none" hidden>Ничего не найдено — попробуйте другое слово.</p>
+{# «всю неделю» — ровно та надпись, что стоит на кнопке сброса дат: совет
+   должен называть кнопку так же, как она подписана. #}
+<p class="feed__none" hidden>Ничего не найдено. Попробуйте другое слово или верните всю неделю.</p>
 {% else %}
 <p class="empty">{{ empty }}</p>
 {% endif %}

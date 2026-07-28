@@ -72,12 +72,18 @@ def init() -> None:
     try:
         conn.executescript(SCHEMA)
         cols = {row[1] for row in conn.execute("PRAGMA table_info(articles)")}
-        # ru->en: старые RU-переводы неприменимы к новой целевой колонке,
-        # просто отбрасываем колонки и переводим заново под title_en/text_en.
-        if "title_ru" in cols:
-            conn.execute("ALTER TABLE articles DROP COLUMN title_ru")
-        if "text_ru" in cols:
-            conn.execute("ALTER TABLE articles DROP COLUMN text_ru")
+        # en->ru (2026-07): целевой язык снова русский, английский из
+        # конвейера убран. Прежняя миграция здесь ДРОПАЛА title_ru/text_ru
+        # (наследие обратного перехода ru->en) и молча стирала их при каждом
+        # init() — в т.ч. на полуночном daily_run. Теперь наоборот: колонки
+        # создаются. title_en/text_en ниже не трогаем — там лежат 2420 уже
+        # оплаченных переводов, пусть остаются архивом.
+        if "title_ru" not in cols:
+            conn.execute("ALTER TABLE articles ADD COLUMN title_ru TEXT")
+        if "text_ru" not in cols:
+            conn.execute("ALTER TABLE articles ADD COLUMN text_ru TEXT")
+        if "translated_by" not in cols:
+            conn.execute("ALTER TABLE articles ADD COLUMN translated_by TEXT")
         if "title_en" not in cols:
             conn.execute("ALTER TABLE articles ADD COLUMN title_en TEXT")
         if "text_en" not in cols:
