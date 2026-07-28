@@ -1,4 +1,4 @@
-/* Сигнал — rss.bhutyan.online
+/* Bhutyan.online — витрина rss.bhutyan.online
    Направление: не газетная полоса, а приборный отсчёт. Шкала важности —
    ОДИН тон, светлый→тёмный (величина, не категория); длина столбика кодирует
    ту же величину, число рядом — её прямая подпись. Смелость потрачена в одном
@@ -144,6 +144,14 @@ a { color: inherit; }
 .mark__word {
   font: 900 1.0625rem/1 var(--font-display);
   letter-spacing: -0.025em;
+  white-space: nowrap;
+}
+
+/* Домен-хвост тише имени: на 360px шапка делит строку с поиском по стране,
+   а сплошным чёрным «Bhutyan.online» она читается как одно длинное слово. */
+.mark__tld {
+  font-weight: 500;
+  color: var(--ink-3);
 }
 
 .regions {
@@ -745,12 +753,55 @@ a { color: inherit; }
 }
 .prose h2:first-child { margin-top: 0; }
 .prose p { margin: 0 0 0.875rem; color: var(--ink-2); }
+/* Текст набран --ink-2; выделение работает только если оно темнее фона строки. */
+.prose b { color: var(--ink); font-weight: 600; }
+
+.prose ul { margin: 0 0 0.875rem; padding: 0; list-style: none; }
+.prose li {
+  position: relative;
+  margin-bottom: 0.75rem;
+  padding-inline-start: 1.125rem;
+  color: var(--ink-2);
+}
+/* Маркер — тот же штрих, что в шкале важности: список объясняет как раз её. */
+.prose li::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 0;
+  top: 0.6875em;
+  width: 0.5rem;
+  height: 2px;
+  background: var(--sig-2);
+}
+
 .prose code {
   padding: 0.0625rem 0.3125rem;
   font: 400 0.875em var(--font-data);
   background: var(--panel-sunk);
   border-radius: 2px;
   color: var(--ink);
+}
+
+/* ── Страница RSS-канала (feed.xsl) ───────────────────────────────────── */
+/* Человек попал на .xml по ссылке и видит непонятное. Врезка объясняет, что
+   это и что делать, и потому стоит выше списка — а не сноской под ним. */
+.hint {
+  max-width: 40rem;
+  margin: 1.75rem 0 2rem;
+  padding: 1rem 1.125rem;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-inline-start: 3px solid var(--sig-2);
+  border-radius: 3px;
+}
+.hint__lead { margin: 0 0 0.5rem; font-size: 1rem; color: var(--ink); }
+.hint__lead b { font-weight: 600; }
+.hint__body { margin: 0; font-size: 0.9375rem; line-height: 1.5; color: var(--ink-2); }
+
+.feed__stamp {
+  margin: 0 0 0.75rem;
+  font: 400 0.75rem var(--font-data);
+  color: var(--ink-3);
 }
 
 .index { margin-top: 3.5rem; padding-top: 2rem; border-top: 1px solid var(--rule); }

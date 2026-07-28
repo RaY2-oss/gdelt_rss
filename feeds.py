@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 from dateutil import parser as dtparser
 from feedgen.feed import FeedGenerator
+from lxml import etree
 
 import settings
 import db
@@ -237,6 +238,31 @@ def _top_items(rows, country):
     return [max(groups[lab], key=lambda r: r[4] or "") for lab, _s in rank(groups)]
 
 
+_FEED_XSL = os.path.join(settings.BASE_DIR, "site_static", "feed.xsl")
+
+
+def write_feed(fg, path):
+    """XML для читалок плюс HTML-двойник для людей.
+
+    По .xml браузер показывает голое дерево тегов, а <?xml-stylesheet?> дело
+    больше не спасает: Chrome 151 выкинул XSLT совсем и вместо страницы рисует
+    жёлтую плашку «browser does not support». Поэтому тот же feed.xsl
+    применяется здесь, на сборке, а nginx подставляет готовый HTML тем, кто
+    пришёл из адресной строки. Адрес не меняется — его можно скопировать и
+    подписаться, — а читалки получают ровно тот же XML, что и раньше.
+    """
+    xml = fg.rss_str(pretty=True)
+    with open(path, "wb") as f:
+        f.write(xml)
+
+    os.makedirs(settings.FEED_HTML_DIR, exist_ok=True)
+    twin = os.path.join(settings.FEED_HTML_DIR,
+                        os.path.basename(path)[:-len(".xml")] + ".html")
+    xslt = etree.XSLT(etree.parse(_FEED_XSL))
+    with open(twin, "wb") as f:
+        f.write(bytes(xslt(etree.fromstring(xml))))
+
+
 def build_country(conn, country):
     since = (datetime.now(timezone.utc) - timedelta(hours=settings.WINDOW_HOURS)).isoformat()
     # Порог один — граница приёма: вердикт accepted/rejected из pipeline.score.
@@ -265,8 +291,7 @@ def build_country(conn, country):
         fe.title((t_en or title or url)[:300])
         fe.content(x_en or text or "", type="CDATA")
         fe.pubDate(_pubdate(pdate, fa))
-    out = os.path.join(settings.OUTPUT_DIR, f"{country}.xml")
-    fg.rss_file(out, pretty=True)
+    write_feed(fg, os.path.join(settings.OUTPUT_DIR, f"{country}.xml"))
     return len(items)
 
 

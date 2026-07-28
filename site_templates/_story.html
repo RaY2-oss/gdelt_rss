@@ -4,7 +4,7 @@
 <article class="story" style="--w: {{ s.score }}; --i: {{ i if i < 20 else 20 }}" data-tier="{{ s.tier }}"
          data-score="{{ s.score }}"
          data-find="{{ s.title|lower }} {{ s.country_ru|lower }} {{ s.domain }}">
-  <div class="story__sig" title="Важность {{ s.score }} из 100 — оценка модели по теме и значимости">
+  <div class="story__sig" title="Важность {{ s.score }} из 100 — сколько изданий написали, насколько сюжет связан с остальной лентой страны и кто в нём фигурирует">
     <span class="story__bar" aria-hidden="true"></span>
     <span class="story__score">{{ s.score }}</span>
   </div>
@@ -48,7 +48,7 @@
   <span class="legend__ramp" aria-hidden="true">
     {% for t in range(5) %}<i data-tier="{{ t }}"></i>{% endfor %}
   </span>
-  <span class="legend__ends"><b>5</b> фоновая — <b>100</b> сильный сигнал</span>
+  <span class="legend__ends"><b>0</b> одиночная заметка — <b>100</b> главный сюжет дня</span>
 </div>
 {% endmacro %}
 

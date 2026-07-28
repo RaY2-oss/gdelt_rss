@@ -39,7 +39,7 @@ TEMPLATE_DIR = os.path.join(BASE_DIR, "site_templates")
 STATIC_DIR = os.path.join(BASE_DIR, "site_static")
 OUT_DIR = os.environ.get("GDELT_SITE_OUT", "/var/www/rss_site")
 
-SITE_TITLE = "Сигнал"
+SITE_TITLE = "Bhutyan.online"
 SITE_TAGLINE = "Наука и технологии 89 стран Азии и Африки"
 FEED_BASE = "https://rss.bhutyan.online"
 

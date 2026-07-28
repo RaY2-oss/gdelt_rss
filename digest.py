@@ -131,8 +131,7 @@ def _write_feed(country, day_str, picked, translated):
         fe.title((t_en or c["title"] or c["url"])[:300])
         fe.content(x_en or c["text"] or "", type="CDATA")
         fe.pubDate(_pubdate(c["pdate"], c["fa"]))
-    out = os.path.join(settings.OUTPUT_DIR, f"{country}_digest.xml")
-    fg.rss_file(out, pretty=True)
+    feeds.write_feed(fg, os.path.join(settings.OUTPUT_DIR, f"{country}_digest.xml"))
 
 
 def _record_sent(conn, country, day_str, picked):
