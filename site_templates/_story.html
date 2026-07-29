@@ -22,7 +22,13 @@
   </summary>
   <div class="full__text">
     {% for para in s.body %}<p>{{ para }}</p>{% endfor %}
-    <p class="full__out"><a href="{{ s.url }}" rel="noopener nofollow">Открыть на {{ s.domain }}</a></p>
+    {# Свернуть можно и снизу: дочитавший текст стоит в его конце, а
+       единственная кнопка сворачивания была наверху — приходилось листать
+       обратно к началу, чтобы закрыть. #}
+    <p class="full__out">
+      <a href="{{ s.url }}" rel="noopener nofollow">Открыть на {{ s.domain }}</a>
+      <button class="full__hide" type="button" data-close-full>свернуть текст</button>
+    </p>
   </div>
 </details>
 {% elif s.snippet %}
@@ -31,10 +37,41 @@
 {% endmacro %}
 
 
+{# Объекты сюжета — кнопки, а не подпись: имя ищется по всему корпусу недели,
+   а на странице страны или региона — в её пределах (data-seed-scope). Стоят у
+   каждой строки, а не только у лида: «кто в этой новости» — тот же вопрос на
+   девяносто девятой строке, что и на первой. #}
+{% macro ents(names) %}
+{% if names %}
+<ul class="ents">
+  {% for e in names %}
+  <li><button type="button" data-seed="{{ e.strip() }}" data-seed-scope>{{ ru_name(e) }}</button></li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% endmacro %}
+
+
+{# Остальные издания, подхватившие сюжет. Одинаково у лида и у любой строки:
+   размер кластера — такое же показание, как важность. #}
+{% macro sources(s) %}
+{% if s.sources|length > 1 %}
+<details class="story__more">
+  <summary class="story__summary">Ещё {{ (s.sources|length) - 1 }} {{ ((s.sources|length) - 1)|plural('источник','источника','источников') }}</summary>
+  <ul class="story__sources">
+    {% for src in s.sources[1:] %}
+    <li><a href="{{ src.url }}" rel="noopener nofollow">{{ src.domain }}</a></li>
+    {% endfor %}
+  </ul>
+</details>
+{% endif %}
+{% endmacro %}
+
+
 {% macro story(s, show_country=True, i=0, no=1) %}
 <article class="story" style="--w: {{ s.score }}; --i: {{ i if i < 20 else 20 }}" data-tier="{{ s.tier }}"
          data-score="{{ s.score }}" data-day="{{ s.day }}"
-         data-find="{{ s.title|lower }} {{ s.country_ru|lower }} {{ s.domain }}">
+         data-find="{{ s.title|lower }} {{ s.country_ru|lower }} {{ s.domain }} {% for e in s.entities %}{{ ru_name(e)|lower }} {% endfor %}">
   <div class="story__sig">
     <span class="story__no">{{ no }}</span>
   </div>
@@ -58,17 +95,8 @@
     </p>
 
     {{ snippet(s) }}
-
-    {% if s.sources|length > 1 %}
-    <details class="story__more">
-      <summary class="story__summary">Ещё {{ (s.sources|length) - 1 }} {{ ((s.sources|length) - 1)|plural('источник','источника','источников') }}</summary>
-      <ul class="story__sources">
-        {% for src in s.sources[1:] %}
-        <li><a href="{{ src.url }}" rel="noopener nofollow">{{ src.domain }}</a></li>
-        {% endfor %}
-      </ul>
-    </details>
-    {% endif %}
+    {{ ents(s.entities) }}
+    {{ sources(s) }}
   </div>
 </article>
 {% endmacro %}
@@ -140,6 +168,10 @@
   <label class="filter__label" for="q">Фильтр</label>
   <input class="filter__input" id="q" type="search" placeholder="{{ placeholder }}"
          autocomplete="off" data-filter>
+  {# Подсказки собирает app.js по самой ленте страницы: у страны предлагаются
+     её издания и её люди, у региона — его страны. Готовым списком с сервера
+     это быть не может — фильтр режет ту ленту, что на странице. #}
+  <div class="filter__sugg" data-sugg hidden></div>
   <span class="filter__count" data-filter-count></span>
   <button class="filter__wide" type="button" data-find-open>Искать по всей неделе</button>
 </form>

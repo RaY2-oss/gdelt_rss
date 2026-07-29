@@ -98,6 +98,51 @@ REGIONS = [
       "namibia", "madagascar", "malawi", "mauritius"]),
 ]
 
+# Центроиды стран, градусы (долгота, широта). Из них строится карта охвата на
+# главной: точка на равнопромежуточной проекции, без единого килобайта
+# геометрии границ. Очертания континентов складываются из самих точек — это
+# радар станций, а не политическая карта, и для витрины ровно то, что нужно.
+# Микрогосударства чуть разведены руками (Макао, Бахрейн, Сингапур, Гамбия):
+# в масштабе 166° разница в полградуса — это три пикселя, и точки слипались.
+GEO = {
+    "india": (79, 22), "pakistan": (69, 30), "bangladesh": (90, 24),
+    "sri_lanka": (81, 7.5), "nepal": (84, 28.4), "bhutan": (90.5, 27.6),
+    "maldives": (73, 3.5), "afghanistan": (66, 34),
+    "indonesia": (113, -2.5), "malaysia": (101.5, 4.2), "singapore": (104.4, 0.4),
+    "thailand": (100.5, 15), "vietnam": (106.5, 16), "philippines": (122, 12),
+    "myanmar": (96, 21), "cambodia": (105, 12.4), "laos": (102.8, 18.6),
+    "brunei": (115.4, 5.4), "east_timor": (125.7, -8.8),
+    "china": (104, 35), "japan": (138, 36.5), "south_korea": (127.8, 36),
+    "north_korea": (127, 40.3), "mongolia": (103, 46.5), "taiwan": (121, 23.7),
+    "hong_kong": (115.6, 22.6), "macau": (112, 20.6),
+    "kazakhstan": (67, 48), "uzbekistan": (64, 41.5), "turkmenistan": (59, 39),
+    "kyrgyzstan": (74.7, 41.5), "tajikistan": (71, 38.6),
+    "turkey": (35, 39), "iran": (53, 32), "iraq": (44, 33),
+    "saudi_arabia": (45, 24), "uae": (54.8, 23.4), "israel": (34.9, 31.5),
+    "qatar": (51.6, 24.8), "kuwait": (47.8, 29.6), "oman": (56.5, 21),
+    "bahrain": (50.2, 26.6), "jordan": (36.6, 31), "lebanon": (35.6, 34.2),
+    "syria": (38, 35.2), "yemen": (47.5, 15.5),
+    "egypt": (30, 27), "libya": (17, 27), "tunisia": (9.5, 34),
+    "algeria": (2.6, 28), "morocco": (-6, 32), "sudan": (30, 15.5),
+    "nigeria": (8, 9.5), "ghana": (-1.2, 7.9), "senegal": (-14.4, 14.8),
+    "ivory_coast": (-5.5, 7.5), "mali": (-4, 17.5), "burkina_faso": (-1.7, 12.3),
+    "niger": (9, 17.5), "guinea": (-10.9, 10), "benin": (2.3, 9.3),
+    "togo": (0.9, 8.6), "sierra_leone": (-11.8, 8.5), "liberia": (-9.4, 6.4),
+    "mauritania": (-10.9, 20), "gambia": (-16.6, 12.8),
+    "kenya": (37.9, 0.2), "tanzania": (34.9, -6.4), "uganda": (32.3, 1.4),
+    "ethiopia": (40.5, 9.1), "rwanda": (29.9, -1.9), "somalia": (46.2, 5.2),
+    "south_sudan": (30.2, 7.9), "eritrea": (39.8, 15.2),
+    "cameroon": (12.4, 7.4), "dr_congo": (23.6, -2.9), "congo": (15.8, -0.2),
+    "chad": (18.7, 15.5), "gabon": (11.6, -0.8), "angola": (17.9, -11.2),
+    "south_africa": (24.7, -29), "zimbabwe": (29.2, -19), "zambia": (27.8, -13.1),
+    "mozambique": (35.5, -18.7), "botswana": (24.7, -22.3), "namibia": (17.2, -22.9),
+    "madagascar": (46.9, -18.8), "malawi": (34.3, -13.3), "mauritius": (57.6, -20.3),
+}
+
+# Рамка карты. Шире охвата стран на пару градусов с каждой стороны, чтобы
+# крайние точки (Гамбия, Япония, ЮАР) не липли к краю поля.
+GEO_BOX = (-21, 146, 52, -33)  # запад, восток, север, юг
+
 RU_COUNTRY = {
     "india": "Индия", "pakistan": "Пакистан", "bangladesh": "Бангладеш",
     "sri_lanka": "Шри-Ланка", "nepal": "Непал", "bhutan": "Бутан",
@@ -495,6 +540,36 @@ def days(now, have=(), span=None):
     return out
 
 
+def map_dots(by_country):
+    """Карта охвата: страна — кружок на своём месте по координатам GEO.
+
+    Размер точки — сколько сюжетов (по корню: площадь пропорциональна числу,
+    иначе Индия накрывает половину Южной Азии), заливка — важность верхнего
+    сюжета, той же шкалой, что и лента. Мелкие точки идут последними и потому
+    лежат сверху: страна с тремя сюжетами не должна пропадать под соседкой с
+    тремя сотнями.
+    """
+    west, east, north, south = GEO_BOX
+    peak = max([len(v) for v in by_country.values()] or [1]) or 1
+    out = []
+    for c, items in by_country.items():
+        lon, lat = GEO[c]
+        top = items[0] if items else None
+        out.append({
+            "key": c,
+            "name": RU_COUNTRY.get(c, settings.country_display(c)),
+            "x": round((lon - west) / (east - west) * 100, 2),
+            "y": round((north - lat) / (north - south) * 100, 2),
+            "n": len(items),
+            "r": round(5 + 11 * (len(items) / peak) ** 0.5, 1),
+            "score": top["score"] if top else 0,
+            "tier": _tier(top["score"]) if top else 0,
+            "title": top["title"] if top else "",
+        })
+    out.sort(key=lambda d: -d["n"])
+    return out
+
+
 def pipeline_status(conn, now):
     last = conn.execute("SELECT MAX(fetched_at) FROM articles").fetchone()[0]
     since = (now - timedelta(hours=settings.WINDOW_HOURS)).isoformat()
@@ -580,8 +655,15 @@ def build(out_dir=OUT_DIR):
         conn.close()
 
     def ru_name(raw):
+        # Пакетом переведены только имена «кто в новостях» и лида — платить
+        # сетью за все объекты всех сюжетов незачем. Остальным хватает
+        # словаря, а чего нет и там, покажем латиницей с заглавных.
         raw = raw.strip()
-        return names_ru.get(raw) or raw.title()
+        return names_ru.get(raw) or glossary.lookup(raw) or raw.title()
+
+    # global, а не переменная рендера: макрос строки ленты импортируется без
+    # контекста страницы (см. _env)
+    env.globals["ru_name"] = ru_name
 
     regions = []
     for slug, name, countries in REGIONS:
@@ -623,9 +705,8 @@ def build(out_dir=OUT_DIR):
     _write(os.path.join(out_dir, "index.html"),
            env.get_template("index.html").render(
                lead=lead,
-               lead_ents=[{"name": ru_name(e), "key": e.strip()}
-                          for e in lead["entities"]] if lead else [],
-               items=everything[1:HOME_LIMIT], total=len(everything), **ctx))
+               items=everything[1:HOME_LIMIT], total=len(everything),
+               dots=map_dots(by_country), **ctx))
 
     for region in regions:
         _write(os.path.join(out_dir, "r", f"{region['slug']}.html"),
@@ -671,6 +752,19 @@ def _selfcheck():
         f"лишние {sorted(set(mapped) - set(settings.COUNTRIES))}, "
         f"потерянные {sorted(set(settings.COUNTRIES) - set(mapped))}")
     assert set(RU_COUNTRY) == set(settings.COUNTRIES), "нет русского имени страны"
+    assert set(GEO) == set(settings.COUNTRIES), "страна без координат на карте"
+
+    # карта: точка стоит внутри рамки, крупная страна крупнее мелкой
+    dots = map_dots({"india": [{"score": 96, "title": "т"}] * 40,
+                     "japan": [{"score": 40, "title": "т"}],
+                     "morocco": []})
+    assert all(0 < d["x"] < 100 and 0 < d["y"] < 100 for d in dots)
+    by = {d["key"]: d for d in dots}
+    assert by["india"]["r"] > by["japan"]["r"] > by["morocco"]["r"]
+    assert by["india"]["x"] < by["japan"]["x"]      # Индия западнее Японии
+    assert by["morocco"]["y"] < by["india"]["y"]    # Марокко севернее Индии
+    assert [d["key"] for d in dots][-1] == "morocco"  # пустая страна сверху
+    assert by["morocco"]["tier"] == 0 and by["india"]["tier"] == 4
 
     assert _snippet("") == ""
     assert _snippet("Короткий текст.") == "Короткий текст."

@@ -1,19 +1,44 @@
 {% extends "base.html" %}
-{% from "_story.html" import feed, tools, snippet %}
+{% from "_story.html" import feed, tools, snippet, ents, sources %}
+{% from "_map.html" import radar %}
+{% set home = True %}
 
 {% block content %}
-{# Витрина открывается новостью, а не приборами. Раньше здесь сверху стояли две
-   плашки — развёрнутый атлас и пульт ленты, — и главный сюжет недели начинался
-   на третьем экране. Атлас вернулся в боковую панель (кнопка «Атлас» в шапке
-   видна всегда), пульт свернулся в одну строку под лидом.
+{# Витрина открывается собой: чем занята, сколько охватывает, что наверху.
+   Заголовок — единственное место, где сайт говорит, что он такое; ниже
+   счётчики охвата и свёрнутый атлас — та же плашка, что «Отбор» над лентой,
+   только внутри карта, а не приборы. Развёрнутым атлас не стоит: 89 стран
+   поверх экрана отодвигали новость на третий разворот, из-за чего он отсюда
+   в своё время и уехал.
 
-   Лид — не отдельный тёмный щит с приборной шкалой, а просто первая строка
-   ленты, набранная крупно: та же бумага, та же заливка важности, тот же
-   волосок снизу. Выделен размером, а не сменой материала, — и потому читается
-   как начало ленты, а не как баннер над ней. Фильтруется вместе со всеми
-   (data-day, data-score, data-find). #}
+   Лид — не отдельный тёмный щит, а просто первая строка ленты, набранная
+   крупно: та же бумага, та же заливка важности, тот же волосок снизу.
+   Фильтруется вместе со всеми (data-day, data-score, data-find). #}
+<section class="home wrap">
+  <header class="page__head">
+    <h1 class="page__title home__title">Новости науки и технологий Азии и Африки</h1>
+    <p class="page__note">
+      {{ status.countries }} {{ status.countries|plural('страна','страны','стран') }} на связи,
+      {{ total }} {{ total|plural('сюжет','сюжета','сюжетов') }}
+      за {{ status.days }} {{ status.days|plural('день','дня','дней') }}.
+      Порядок считает алгоритм: у каждого сюжета важность от 0 до 100.
+    </p>
+  </header>
+
+  <details class="tools tools--atlas">
+    <summary class="tools__sum">
+      <span class="tools__ico" aria-hidden="true"></span>
+      <span class="tools__word">Атлас</span>
+      <span class="tools__hint">карта охвата, {{ dots|length }} стран</span>
+    </summary>
+    <div class="tools__body">
+      {{ radar(dots) }}
+    </div>
+  </details>
+</section>
+
 <section class="board board--feed wrap">
-  {{ tools(days, 'Тема, страна или издание') }}
+  {{ tools(days, 'Тема, страна, имя или издание') }}
 
   {% if lead %}
   <article class="story story--lead" style="--w: {{ lead.score }}; --i: 0" data-tier="{{ lead.tier }}"
@@ -25,9 +50,9 @@
 
     <div class="story__body">
       <p class="lead__eyebrow">Верх недели</p>
-      <h1 class="lead__title">
+      <h2 class="lead__title">
         <a class="story__link" href="{{ lead.url }}" rel="noopener nofollow" {% if lead.lang_code %}lang="{{ lead.lang_code }}"{% endif %}>{{ lead.title }}</a>
-      </h1>
+      </h2>
 
       <p class="story__meta">
         <span class="story__imp" title="Важность {{ lead.score }} из 100">
@@ -41,12 +66,8 @@
       </p>
 
       {{ snippet(lead) }}
-
-      {% if lead_ents %}
-      <ul class="lead__ents">
-        {% for e in lead_ents %}<li><button type="button" data-seed="{{ e.key }}">{{ e.name }}</button></li>{% endfor %}
-      </ul>
-      {% endif %}
+      {{ ents(lead.entities) }}
+      {{ sources(lead) }}
     </div>
   </article>
   {% endif %}

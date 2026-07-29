@@ -19,14 +19,14 @@
   } catch (e) {}
 </script>
 </head>
-<body{% if current_region %} data-region="{{ current_region }}"{% endif %}{% if current_country %} data-country="{{ current_country }}"{% endif %}>
+<body{% if home %} data-home{% endif %}{% if current_region %} data-region="{{ current_region }}"{% endif %}{% if current_country %} data-country="{{ current_country }}"{% endif %}>
 <a class="skip" href="#main">К содержимому</a>
 
 {# Шапка в одну строку. Раньше их было три: знак с поиском, полоса регионов и
    полоса приёма — сто пятьдесят пикселей, из которых работала одна ссылка.
-   Регионы и страны ушли в «Атлас» (он же и есть карта охвата), телеметрия — в
-   подвал, а здесь остался пульс приёма: единственное, что меняется от минуты
-   к минуте и потому обязано быть на виду. #}
+   Регионы и страны ушли в «Атлас» (он же и есть карта охвата), телеметрия —
+   в подвал. Пульс приёма («приём 10 мин назад») уехал туда же: читателю
+   витрины он ничего не сообщал, а место в первой строке занимал. #}
 <header class="top">
   <div class="top__bar wrap">
     <button class="atlas-btn" type="button" aria-controls="atlas" aria-expanded="false">
@@ -38,13 +38,6 @@
       <span class="mark__glyph" aria-hidden="true"></span>
       <span class="mark__word">Bhutyan<span class="mark__tld">.online</span></span>
     </a>
-
-    <span class="top__live{% if not status.live %} is-stale{% endif %}"
-          title="Когда пришла последняя статья">
-      <span class="top__pulse" aria-hidden="true"></span>
-      <span class="top__word">{{ 'приём' if status.live else 'тишина' }}</span>
-      <b>{{ status.last_tick }}</b>
-    </span>
 
     {# Не поле, а кнопка: искать всё равно негде — корпус недели лежит
        отдельным файлом и подгружается по первому нажатию. #}
@@ -70,6 +63,7 @@
       <span class="foot__cell"><b>{{ status.countries }}</b> {{ status.countries|plural('страна','страны','стран') }} на связи</span>
       <span class="foot__cell"><b>{{ status.scored }}</b> {{ status.scored|plural('статья','статьи','статей') }} за {{ status.window }} ч</span>
       <span class="foot__cell">глубина ленты <b>{{ status.days }}</b> {{ status.days|plural('день','дня','дней') }}</span>
+      <span class="foot__cell">последняя статья {{ status.last_tick }}</span>
       <span class="foot__cell">сборка {{ built }}</span>
     </p>
     <p class="foot__line">

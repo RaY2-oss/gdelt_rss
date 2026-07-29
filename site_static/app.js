@@ -377,6 +377,96 @@
     if (word && word.value) apply();
   }
 
+  // ── Подсказки фильтра: словарь этой страницы, а не всего корпуса ───────
+  // Поиск по всей неделе (.find) подсказывает объектами всего корпуса — здесь
+  // это было бы враньём: фильтр режет ТУ ленту, что на странице, и подсказка
+  // «Индонезия» на странице Кении не нашла бы ничего. Словарь собирается по
+  // самой ленте — страны, издания, имена, — поэтому у страны в подсказках её
+  // издания и её люди, у региона — его страны.
+  var sugg = q$('[data-sugg]');
+  if (sugg && word && stories.length) {
+    var dict = null;
+
+    var build = function () {
+      var count = {};
+      var add = function (s) {
+        s = (s || '').trim();
+        if (s.length > 1) count[s] = (count[s] || 0) + 1;
+      };
+      stories.forEach(function (n) {
+        add((n.querySelector('.story__country') || {}).textContent);
+        add((n.querySelector('.story__source') || {}).textContent);
+        Array.prototype.forEach.call(n.querySelectorAll('.ents button'),
+          function (b) { add(b.textContent); });
+      });
+      return Object.keys(count)
+        .sort(function (a, b) { return count[b] - count[a] || a.localeCompare(b); })
+        .map(function (k) { return { label: k, n: count[k] }; });
+    };
+
+    var draw = function () {
+      if (!dict) dict = build();
+      var v = word.value.trim().toLowerCase();
+      var rows = dict.filter(function (d) {
+        return !v || (d.label.toLowerCase().indexOf(v) !== -1 && d.label.toLowerCase() !== v);
+      }).slice(0, 8);
+      sugg.textContent = '';
+      rows.forEach(function (d) {
+        var b = el('button', 'filter__opt', d.label);
+        b.type = 'button';
+        b.appendChild(el('b', null, d.n));
+        // mousedown, а не click: до click поле успевает потерять фокус, панель
+        // закрывается, и нажатие приходит уже в пустоту
+        b.addEventListener('mousedown', function (e) {
+          e.preventDefault();
+          word.value = d.label;
+          apply();
+          draw();
+          word.focus();
+        });
+        sugg.appendChild(b);
+      });
+      sugg.hidden = !rows.length;
+    };
+
+    word.addEventListener('focus', draw);
+    word.addEventListener('input', draw);
+    word.addEventListener('blur', function () { sugg.hidden = true; });
+    word.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !sugg.hidden) { e.stopPropagation(); sugg.hidden = true; }
+    });
+  }
+
+  // ── Свернуть текст снизу ──────────────────────────────────────────────
+  // Второй <summary> в <details> невозможен, а дочитавшему до конца незачем
+  // листать к началу, чтобы закрыть. Три строки вместо своего аккордеона.
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest ? e.target.closest('[data-close-full]') : null;
+    if (!b) return;
+    var box = b.closest('details');
+    box.open = false;
+    box.querySelector('summary').scrollIntoView({ block: 'nearest' });
+  });
+
+  // ── Проявление при прокрутке там, где нет CSS-таймлайнов ──────────────
+  // В Chromium всё движение считает CSS (animation-timeline: view()), и сюда
+  // мы не заходим. В Firefox и Safari таймлайнов нет — без этого лента у
+  // половины читателей просто возникала целиком, без единого перехода.
+  if (window.IntersectionObserver &&
+      !(window.CSS && CSS.supports && CSS.supports('animation-timeline: view()')) &&
+      !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    root.classList.add('no-tl');
+    var eye = new IntersectionObserver(function (rows) {
+      rows.forEach(function (r) {
+        if (!r.isIntersecting) return;
+        r.target.classList.add('is-in');
+        eye.unobserve(r.target);
+      });
+    }, { rootMargin: '0px 0px -8% 0px' });
+    all('.story:not(.story--lead), .chips__item, .who__list li, .rmap')
+      .forEach(function (n) { eye.observe(n); });
+  }
+
   // ── Тема ──────────────────────────────────────────────────────────────
   var order = ['auto', 'light', 'dark'];
   var names = { auto: 'Тема: как в системе', light: 'Тема: светлая', dark: 'Тема: тёмная' };
