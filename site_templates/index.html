@@ -1,78 +1,56 @@
 {% extends "base.html" %}
-{% from "_story.html" import story, feed, legend, filter, dates %}
-{% from "_atlas.html" import atlas_grid %}
+{% from "_story.html" import feed, tools, snippet %}
 
 {% block content %}
-{# Атлас развёрнут прямо на главной и стоит первым: боковая панель это та же
-   таблица, но за лишним нажатием, а первый вопрос к витрине 89 стран — «что
-   вообще есть». Пролистал мимо — в шапке проявляется кнопка (app.js). #}
-<section class="homeatlas" data-atlas-anchor>
-  <div class="wrap">
-    <div class="homeatlas__top">
-      <h2 class="homeatlas__title">Охват</h2>
-      <p class="homeatlas__note">
-        {{ status.countries }} {{ status.countries|plural('страна','страны','стран') }} на связи ·
-        заливка — важность верхнего сюжета, число — сколько сюжетов за
-        {{ status.days }} {{ status.days|plural('день','дня','дней') }}
-      </p>
-    </div>
-    {{ atlas_grid(regions) }}
-  </div>
-</section>
+{# Витрина открывается новостью, а не приборами. Раньше здесь сверху стояли две
+   плашки — развёрнутый атлас и пульт ленты, — и главный сюжет недели начинался
+   на третьем экране. Атлас вернулся в боковую панель (кнопка «Атлас» в шапке
+   видна всегда), пульт свернулся в одну строку под лидом.
 
-{# Пульт ленты стоит НАД первым сюжетом, а не между ним и остальными. Раньше
-   ось, даты и фильтр вклинивались следом за лидом, и лента начиналась со
-   второго номера через двести пикселей приборов — читалось как две разные
-   ленты. Теперь лид это просто её первая строка, только крупная: он и
-   фильтруется вместе со всеми (data-day, data-score, data-find). #}
-<section class="board wrap">
-  <div class="board__head">
-    <h2 class="board__title">Лента</h2>
-    <p class="board__note">
-      {{ total }} {{ total|plural('сюжет','сюжета','сюжетов') }} за {{ status.days }} {{ status.days|plural('день','дня','дней') }} ·
-      показаны {{ items|length + 1 }} по убыванию важности
-    </p>
-    {{ legend() }}
-    {{ dates(days) }}
-    {{ filter('Тема, страна или издание') }}
-  </div>
-</section>
+   Лид — не отдельный тёмный щит с приборной шкалой, а просто первая строка
+   ленты, набранная крупно: та же бумага, та же заливка важности, тот же
+   волосок снизу. Выделен размером, а не сменой материала, — и потому читается
+   как начало ленты, а не как баннер над ней. Фильтруется вместе со всеми
+   (data-day, data-score, data-find). #}
+<section class="board board--feed wrap">
+  {{ tools(days, 'Тема, страна или издание') }}
 
-{% if lead %}
-<section class="lead" style="--w: {{ lead.score }}" data-tier="{{ lead.tier }}"
-         data-score="{{ lead.score }}" data-day="{{ lead.day }}"
-         data-find="{{ lead.title|lower }} {{ lead.country_ru|lower }} {{ lead.domain }}">
-  <div class="wrap lead__grid">
-    <div class="lead__gauge">
-      <span class="lead__num">{{ lead.score }}</span>
-      <span class="lead__cap">важность<b>из 100</b></span>
-      <span class="lead__bar" aria-hidden="true"><i></i></span>
+  {% if lead %}
+  <article class="story story--lead" style="--w: {{ lead.score }}; --i: 0" data-tier="{{ lead.tier }}"
+           data-score="{{ lead.score }}" data-day="{{ lead.day }}"
+           data-find="{{ lead.title|lower }} {{ lead.country_ru|lower }} {{ lead.domain }}">
+    <div class="story__sig">
+      <span class="story__no">1</span>
     </div>
 
-    <div class="lead__body">
-      <p class="lead__eyebrow">Верх недели<b>01</b></p>
+    <div class="story__body">
+      <p class="lead__eyebrow">Верх недели</p>
       <h1 class="lead__title">
-        <a class="lead__link" href="{{ lead.url }}" rel="noopener nofollow" {% if lead.lang_code %}lang="{{ lead.lang_code }}"{% endif %}>{{ lead.title }}</a>
+        <a class="story__link" href="{{ lead.url }}" rel="noopener nofollow" {% if lead.lang_code %}lang="{{ lead.lang_code }}"{% endif %}>{{ lead.title }}</a>
       </h1>
-      {% if lead.snippet %}<p class="lead__snippet">{{ lead.snippet }}</p>{% endif %}
-      <p class="lead__meta">
-        <a class="lead__country" href="/c/{{ lead.country }}.html">{{ lead.country_ru }}</a>
-        <span>{{ lead.domain }}</span>
-        {% if lead.outlets > 1 %}<span>{{ lead.outlets }} {{ lead.outlets_word }} подхватили сюжет</span>{% endif %}
-        <time datetime="{{ lead.iso }}">{{ lead.ago }}</time>
-        {% if lead.translated %}<span>пер. с {{ lead.lang }}</span>{% endif %}
+
+      <p class="story__meta">
+        <span class="story__imp" title="Важность {{ lead.score }} из 100">
+          <i class="story__impbar" aria-hidden="true"></i>важность <b>{{ lead.score }}</b>
+        </span>
+        <a class="story__country" href="/c/{{ lead.country }}.html">{{ lead.country_ru }}</a>
+        <span class="story__source">{{ lead.domain }}</span>
+        {% if lead.outlets > 1 %}<span class="story__outlets">{{ lead.outlets }} {{ lead.outlets_word }}</span>{% endif %}
+        <time class="story__time" datetime="{{ lead.iso }}">{{ lead.ago }}</time>
+        {% if lead.translated %}<span class="story__tag">{{ 'пер. с ' ~ lead.lang if lead.lang else 'перевод' }}</span>{% endif %}
       </p>
+
+      {{ snippet(lead) }}
+
       {% if lead_ents %}
       <ul class="lead__ents">
         {% for e in lead_ents %}<li><button type="button" data-seed="{{ e.key }}">{{ e.name }}</button></li>{% endfor %}
       </ul>
       {% endif %}
     </div>
-  </div>
-</section>
-{% endif %}
+  </article>
+  {% endif %}
 
-<section class="board board--feed wrap">
   {{ feed(items, True, 'За неделю ничего не набралось.', 2) }}
 </section>
 {% endblock %}

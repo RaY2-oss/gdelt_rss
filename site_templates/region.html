@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_story.html" import feed, legend, filter, dates %}
+{% from "_story.html" import feed, tools %}
 {% set current_region = region.slug %}
 
 {% block title %}{{ region.name }} — {{ site_title }}{% endblock %}
@@ -28,11 +28,7 @@
     {% endfor %}
   </ul>
 
-  <div class="board__head board__head--tight">
-    {{ legend() }}
-    {{ dates(days) }}
-    {{ filter('Тема, страна или издание') }}
-  </div>
+  {{ tools(days, 'Тема, страна или издание') }}
 
   {{ feed(items, True, 'За неделю в регионе ничего не набралось.') }}
 </section>

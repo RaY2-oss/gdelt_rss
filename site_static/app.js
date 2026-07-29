@@ -47,17 +47,6 @@
     if (closeBtn) closeBtn.addEventListener('click', function () { setAtlas(false); });
   }
 
-  // Кнопка атласа в шапке нужна не всегда: на главной сам атлас развёрнут в
-  // начале страницы, и пока он на виду, кнопка — второй экземпляр того же.
-  // Ушёл за верхний край — проявляем.
-  var anchor = q$('[data-atlas-anchor]');
-  if (anchor && window.IntersectionObserver) {
-    root.classList.add('is-atlasnear');
-    new IntersectionObserver(function (rows) {
-      root.classList.toggle('is-atlasnear', rows[0].isIntersecting);
-    }, { rootMargin: '-20% 0px 0px 0px' }).observe(anchor);
-  }
-
   // ── Поиск по всему корпусу ────────────────────────────────────────────
   // На странице лежит только её лента, а искать хочется по всей неделе,
   // поэтому корпус приезжает отдельным файлом — но лениво, по первому
@@ -280,7 +269,7 @@
   }
 
   // ── Полоса дат: фильтр, который заодно график ─────────────────────────
-  var stories = all('.story, .lead[data-day]');
+  var stories = all('.story');
   var strip = q$('[data-days]');
   var btns = all('.days__btn');
 

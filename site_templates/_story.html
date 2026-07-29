@@ -8,6 +8,29 @@
    Слева — порядковый номер, а не отсчёт важности: «96» рядом с первой строкой
    читалось как номер и сбивало. Сама важность подписана словом и стоит в
    строке выходных данных, где её не спутать ни с чем. #}
+{# Подводка. Многоточие в её конце обрывалось в никуда — теперь сама подводка
+   и есть кнопка: щелчок по ней разворачивает текст статьи на месте. Ссылку
+   это не отменяет (внизу выход на издание), но ради двух абзацев уходить со
+   страницы незачем. Где полного текста нет — обычный абзац, без ложного
+   обещания раскрытия. #}
+{% macro snippet(s) %}
+{% if s.body %}
+<details class="full" {% if not s.translated and s.lang_code %}lang="{{ s.lang_code }}"{% endif %}>
+  <summary class="full__sum">
+    <span class="full__cut">{{ s.snippet }}</span>
+    <span class="full__less">свернуть текст</span>
+  </summary>
+  <div class="full__text">
+    {% for para in s.body %}<p>{{ para }}</p>{% endfor %}
+    <p class="full__out"><a href="{{ s.url }}" rel="noopener nofollow">Открыть на {{ s.domain }}</a></p>
+  </div>
+</details>
+{% elif s.snippet %}
+<p class="story__snippet" {% if not s.translated and s.lang_code %}lang="{{ s.lang_code }}"{% endif %}>{{ s.snippet }}</p>
+{% endif %}
+{% endmacro %}
+
+
 {% macro story(s, show_country=True, i=0, no=1) %}
 <article class="story" style="--w: {{ s.score }}; --i: {{ i if i < 20 else 20 }}" data-tier="{{ s.tier }}"
          data-score="{{ s.score }}" data-day="{{ s.day }}"
@@ -34,7 +57,7 @@
       {% elif s.lang %}<span class="story__tag story__tag--plain">{{ s.lang }}</span>{% endif %}
     </p>
 
-    {% if s.snippet %}<p class="story__snippet" {% if not s.translated and s.lang_code %}lang="{{ s.lang_code }}"{% endif %}>{{ s.snippet }}</p>{% endif %}
+    {{ snippet(s) }}
 
     {% if s.sources|length > 1 %}
     <details class="story__more">
@@ -120,4 +143,26 @@
   <span class="filter__count" data-filter-count></span>
   <button class="filter__wide" type="button" data-find-open>Искать по всей неделе</button>
 </form>
+{% endmacro %}
+
+
+{# Приборы одной строкой. Ось, полоса дат и фильтр занимали триста пикселей
+   поверх ленты — на главной они стояли раньше самой новости, и витрина
+   открывалась пультом вместо новостей. Свёрнуты в строку, разворачиваются
+   нажатием; открытое состояние браузер не запоминает и не должен — по
+   умолчанию показана вся неделя, и полоса ни при чём. Сделано <details>, а не
+   кнопкой на JS: раскрытие узла — ровно то, для чего элемент и существует. #}
+{% macro tools(days, placeholder='Фильтр по ленте') %}
+<details class="tools">
+  <summary class="tools__sum">
+    <span class="tools__ico" aria-hidden="true"></span>
+    <span class="tools__word">Отбор</span>
+    <span class="tools__hint">важность, даты, слово</span>
+  </summary>
+  <div class="tools__body">
+    {{ legend() }}
+    {{ dates(days) }}
+    {{ filter(placeholder) }}
+  </div>
+</details>
 {% endmacro %}

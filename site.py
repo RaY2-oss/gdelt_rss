@@ -245,6 +245,34 @@ def _snippet(text, limit=260, lead=""):
     return out.rstrip(" .,;:—-") + "…"
 
 
+def _paras(text, lead="", limit=2400):
+    """Текст статьи абзацами — то, что разворачивается под подводкой.
+
+    Обрывается по границе абзаца: половина фразы под свёрнутой подводкой хуже,
+    чем три абзаца вместо пяти. Совсем короткие тексты не отдаём вовсе — если
+    вся статья умещается в подводку, разворачивать нечего.
+    """
+    text = (text or "").strip()
+    if lead and text[:len(lead)].lower() == lead.lower():
+        text = text[len(lead):].lstrip(" .,:;—-–\n")
+    out, total = [], 0
+    for p in text.split("\n"):
+        p = _WS.sub(" ", p).strip()
+        if not p:
+            continue
+        if total + len(p) > limit:
+            # абзацев может не быть вовсе (текст пришёл одним куском) — тогда
+            # режем по слову, иначе под кнопкой окажется вся полоса целиком
+            if out:
+                break
+            p = p[:limit].rsplit(" ", 1)[0] + "…"
+        out.append(p)
+        total += len(p)
+        if total >= limit:
+            break
+    return out if total > 400 else []
+
+
 def _tier(score):
     return sum(score >= t for t in TIERS)
 
@@ -335,6 +363,7 @@ def stories(conn, rows, country, now):
             # оригинал показываем, только если он реально другой (был перевод)
             "orig_title": _clean_title(title, head) if (t_ru or t_en) and title else "",
             "snippet": _snippet(x_ru or x_en or text, lead=clean),
+            "body": _paras(x_ru or x_en or text, lead=clean),
             "lang": RU_LANG.get(lang, lang or ""),
             # для атрибута lang= — иначе скринридер и подбор шрифта считают
             # корейский заголовок русским текстом. Показываем язык ТОГО, что
@@ -651,6 +680,12 @@ def _selfcheck():
     assert len(_snippet("длинноеслово " * 60)) <= 262
     assert not _snippet("Заголовок. Дальше.", lead="Заголовок").startswith("Заголовок")
     assert not _snippet(long_text + "x").endswith(".…")  # точка перед многоточием
+
+    assert _paras("") == [] and _paras(long_text[:300]) == []
+    body = _paras("Заголовок\n" + "\n".join([long_text] * 5), lead="Заголовок")
+    assert len(body) == 3 and not body[0].startswith("Заголовок")
+    assert sum(len(p) for p in body) <= 2400 + 1  # многоточие на срезе
+    assert _paras("слово " * 900)[0].endswith("…")  # текст одним куском
 
     # заголовок: склейка сам с собой + хвост издания, режется только по домену
     dup = ("China memory chipmaker CXMT's shares soar in a blockbuster listing"

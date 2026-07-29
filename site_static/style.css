@@ -13,18 +13,22 @@
 :root {
   color-scheme: light dark;
 
-  /* Поле. Светлая тема — холодная (не кремовая) чертёжная бумага. */
-  --surface: #E6EAEF;   --surface: light-dark(#E6EAEF, #05090E);
-  --panel: #F7F9FB;     --panel: light-dark(#F7F9FB, #0C1219);
-  --panel-sunk: #DDE2E9; --panel-sunk: light-dark(#DDE2E9, #111823);
-  --ink: #0C1017;       --ink: light-dark(#0C1017, #E9EDF2);
-  --ink-2: #414B59;     --ink-2: light-dark(#414B59, #A2ACBB);
+  /* Поле. У тем РАЗНЫЕ гаммы, а не одна вывернутая наизнанку: светлая — это
+     бумага, тёмная — экран, и величина на них ведёт себя по-разному. На бумаге
+     краска ложится густым хвойно-зелёным (ведомость, топографический лист), на
+     экране — синим свечением. Синь на белом всю дорогу выглядела разбавленной:
+     светлая тема повторяла шкалу тёмной, а бумага так не работает. */
+  --surface: #E8EBE8;   --surface: light-dark(#E8EBE8, #05090E);
+  --panel: #F5F8F5;     --panel: light-dark(#F5F8F5, #0C1219);
+  --panel-sunk: #DEE3DE; --panel-sunk: light-dark(#DEE3DE, #111823);
+  --ink: #0E120F;       --ink: light-dark(#0E120F, #E9EDF2);
+  --ink-2: #414A43;     --ink-2: light-dark(#414A43, #A2ACBB);
   /* --ink-3 сдвинут от фона на полтона: он держит выходные данные строки, а те
      стоят не на чистой бумаге, а на заливке важности. */
-  --ink-3: #545E6C;     --ink-3: light-dark(#545E6C, #8A94A3);
-  --rule: #CFD6DE;      --rule: light-dark(#CFD6DE, #1A2230);
-  --rule-strong: #A9B3BF; --rule-strong: light-dark(#A9B3BF, #2C3647);
-  --track: #D5DBE3;     --track: light-dark(#D5DBE3, #151C27);
+  --ink-3: #58605A;     --ink-3: light-dark(#58605A, #8A94A3);
+  --rule: #CDD4CE;      --rule: light-dark(#CDD4CE, #1A2230);
+  --rule-strong: #A6AEA8; --rule-strong: light-dark(#A6AEA8, #2C3647);
+  --track: #D5DAD5;     --track: light-dark(#D5DAD5, #151C27);
 
   /* Консоль — шапка, лид и подвал. Тёмная в ОБЕИХ темах: это корпус прибора,
      а не ещё одна поверхность страницы. */
@@ -34,16 +38,15 @@
   --console-ink-2: #93A0B0;
   --console-rule: #1E2733;
 
-  /* Шкала важности: последовательная, ОДИН тон, меняется только светлота.
-     Тон — синий: «темнее = больше» это самое ходовое прочтение величины,
-     а прежний натриевый янтарь заканчивался коричневым, и верх шкалы читался
-     как «выцвело», а не как «максимум». На светлом поле величина темнеет,
-     на тёмном — разгорается. */
-  --sig-0: #A8B8CB;     --sig-0: light-dark(#A8B8CB, #1B2C44);
-  --sig-1: #6C93BE;     --sig-1: light-dark(#6C93BE, #2B5583);
-  --sig-2: #3A6FA8;     --sig-2: light-dark(#3A6FA8, #4A8AC8);
-  --sig-3: #1E4C88;     --sig-3: light-dark(#1E4C88, #7CB8EE);
-  --sig-4: #10306A;     --sig-4: light-dark(#10306A, #B6DCFF);
+  /* Шкала важности: последовательная, ОДИН тон на тему, меняется только
+     светлота. «Темнее = больше» — самое ходовое прочтение величины. На бумаге
+     тон хвойно-зелёный, на экране синий; общего у них только направление: на
+     светлом поле величина темнеет, на тёмном разгорается. */
+  --sig-0: #A3B5A8;     --sig-0: light-dark(#A3B5A8, #1B2C44);
+  --sig-1: #6B9A7E;     --sig-1: light-dark(#6B9A7E, #2B5583);
+  --sig-2: #3A7857;     --sig-2: light-dark(#3A7857, #4A8AC8);
+  --sig-3: #1D5739;     --sig-3: light-dark(#1D5739, #7CB8EE);
+  --sig-4: #0A3A24;     --sig-4: light-dark(#0A3A24, #B6DCFF);
 
   /* Заливка — отдельный ряд, и вот почему. Полоса важности красит фон ПОД
      текстом, а --sig идёт навстречу теме: на светлой теме верх шкалы уходит в
@@ -56,11 +59,11 @@
      а слабейший текст держит ≥4.5:1 на любой ступени в обеих темах (замер —
      scratchpad/contrast.mjs). Величину продолжает нести --sig: двухпиксельная
      кромка слева и мера в строке выходных данных. */
-  --fill-0: #E3E9EF;    --fill-0: light-dark(#E3E9EF, #0C1622);
-  --fill-1: #D3E2F4;    --fill-1: light-dark(#D3E2F4, #0E2138);
-  --fill-2: #C2DBF9;    --fill-2: light-dark(#C2DBF9, #112C4E);
-  --fill-3: #B1D4FD;    --fill-3: light-dark(#B1D4FD, #143764);
-  --fill-4: #A2CEFF;    --fill-4: light-dark(#A2CEFF, #17427A);
+  --fill-0: #E4E9E5;    --fill-0: light-dark(#E4E9E5, #0C1622);
+  --fill-1: #D5E7DA;    --fill-1: light-dark(#D5E7DA, #0E2138);
+  --fill-2: #C5E4CD;    --fill-2: light-dark(#C5E4CD, #112C4E);
+  --fill-3: #B5E1C1;    --fill-3: light-dark(#B5E1C1, #143764);
+  --fill-4: #A6DEB5;    --fill-4: light-dark(#A6DEB5, #17427A);
 
   /* Консоль тёмная в обеих темах, поэтому шкале на ней тему знать не нужно:
      иначе на светлой теме ячейка атласа с максимумом уходила в чёрный, а с
@@ -71,16 +74,19 @@
   --csig-3: #7CB8EE;
   --csig-4: #B6DCFF;
 
-  /* Янтарь — интерфейс, а не данные: подписи разделов, наведение, фокус.
-     Разведён со шкалой намеренно, чтобы «жёлтое» нигде не означало величину.
-     --beam живёт только на тёмной консоли, --accent — на светлом поле. */
-  --beam: #F0B441;
-  --accent: #A8620B;    --accent: light-dark(#A8620B, #F0B441);
+  /* Интерфейс — подписи разделов, наведение, фокус, текущий пункт. Цвета у
+     него нет вовсе: только максимум контраста к своей подложке. Янтарь, что
+     стоял тут раньше, тянул за собой всю бежево-оранжевую гамму прошлой
+     витрины и вдобавок спорил со шкалой — «жёлтое» читалось как величина.
+     Теперь цвет означает ровно одно: величину. Всё остальное — тон бумаги.
+     --beam живёт на тёмной консоли, --accent — на поле страницы. */
+  --beam: #E9EFF5;
+  --accent: #0E120F;    --accent: light-dark(#0E120F, #E9EDF2);
 
-  /* Статус приёма. Зелёный: в синей шкале не участвует и читается как
-     «работает» без словаря. */
-  --live: #12854F;      --live: light-dark(#12854F, #43D98A);
-  --stale: #A83318;     --stale: light-dark(#A83318, #FF8663);
+  /* Статус приёма. Стоит только на консоли, а она тёмная в обеих темах, —
+     значит и цвет один на обе. */
+  --live: #43D98A;
+  --stale: #FF8663;
 
   --font-display: 'Golos Text', system-ui, sans-serif;
   --font-text: 'IBM Plex Sans', 'Noto Sans', system-ui, sans-serif;
@@ -107,7 +113,7 @@
 :root[data-theme='light'] { color-scheme: light; }
 :root[data-theme='dark'] { color-scheme: dark; }
 
-/* Ступень шкалы → цвет. Ставится на .story / .lead / .atlas__cell / .chips__item.
+/* Ступень шкалы → цвет. Ставится на .story / .atlas__cell / .chips__item.
    Три ряда сразу: --tier красит линии и меры, --fill — фон под текстом,
    --ctier — то же на всегда тёмной консоли. */
 [data-tier='0'] { --tier: var(--sig-0); --fill: var(--fill-0); --ctier: var(--csig-0); }
@@ -171,7 +177,7 @@ a { color: inherit; }
   outline-offset: 2px;
   border-radius: var(--r);
 }
-.top :focus-visible, .lead :focus-visible, .foot :focus-visible,
+.top :focus-visible, .foot :focus-visible,
 .atlas :focus-visible { outline-color: var(--beam); }
 
 /* ── Консоль: шапка в одну строку ─────────────────────────────────────── */
@@ -211,31 +217,16 @@ a { color: inherit; }
   border-radius: var(--r);
   font: 400 0.8125rem/1 var(--font-data);
   cursor: pointer;
-  transition: border-color 0.12s, background 0.12s,
-              opacity 0.28s ease, transform 0.28s cubic-bezier(0.16, 0.84, 0.28, 1),
-              max-width 0.28s cubic-bezier(0.16, 0.84, 0.28, 1), padding 0.28s, margin 0.28s;
-  max-width: 12rem;
-  overflow: hidden;
   white-space: nowrap;
+  transition: border-color 0.12s, background 0.12s;
 }
 .atlas-btn:hover { border-color: var(--beam); }
 .atlas-btn[aria-expanded='true'] { background: var(--beam); color: #0A1017; border-color: var(--beam); }
 
-/* Пока развёрнутый атлас главной на виду, кнопка в шапке — его второй
-   экземпляр: она сворачивается влево и уступает место знаку. Ушёл атлас за
-   верхний край — кнопка выезжает обратно (класс ставит app.js). */
-html.is-atlasnear .atlas-btn {
-  max-width: 0;
-  padding-inline: 0;
-  margin-inline-end: -0.5rem;
-  border-color: transparent;
-  opacity: 0;
-  transform: translateX(-0.75rem);
-  pointer-events: none;
-}
-
-/* Три штриха разной длины — те же, что в знаке: атлас и есть карта охвата. */
-.atlas-btn__bars {
+/* Три штриха разной длины — те же, что в знаке: атлас и есть карта охвата.
+   Пульт ленты берёт их же: и там, и там — три ползунка, которые двигаются
+   при раскрытии. */
+.atlas-btn__bars, .tools__ico {
   width: 13px;
   height: 11px;
   background-repeat: no-repeat;
@@ -247,7 +238,8 @@ html.is-atlasnear .atlas-btn {
   background-position: 0 0, 0 5px, 0 10px;
   transition: background-size 0.16s;
 }
-.atlas-btn[aria-expanded='true'] .atlas-btn__bars {
+.atlas-btn[aria-expanded='true'] .atlas-btn__bars,
+.tools[open] .tools__ico {
   background-size: 9px 1.5px, 13px 1.5px, 9px 1.5px;
 }
 
@@ -263,7 +255,7 @@ html.is-atlasnear .atlas-btn {
   transition: background 0.12s;
 }
 .mark:hover { background: var(--console-2); }
-.mark:hover .mark__word { color: var(--beam); }
+
 
 /* Знак — три восходящих штриха: сам знак и есть сигнал. */
 .mark__glyph {
@@ -491,7 +483,7 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
   font: 700 1.0625rem/1.1 var(--font-display);
   letter-spacing: -0.02em;
 }
-.atlas__home:hover .atlas__homeword { color: var(--beam); }
+
 .atlas__homenote {
   display: block;
   margin-top: 0.1875rem;
@@ -577,193 +569,56 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
   color: var(--console-ink-2);
 }
 
-/* ── Атлас на главной ─────────────────────────────────────────────────── */
-/* Та же сетка, но развёрнутая и на светлом поле: первый вопрос к витрине
-   89 стран — «что вообще есть», и тыкать ради него в боковую панель незачем.
-   Панель остаётся для всех остальных страниц. */
-.homeatlas {
-  padding-block: clamp(1.5rem, 3.5vw, 2.75rem) clamp(1rem, 2.5vw, 1.75rem);
-  background: var(--panel);
-  border-bottom: 1px solid var(--rule);
-}
-.homeatlas__top { max-width: var(--measure); margin-bottom: 1.25rem; }
-.homeatlas__title {
-  display: flex;
-  align-items: center;
-  gap: 0.625rem;
-  margin: 0;
-  font: 500 0.75rem/1 var(--font-data);
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  color: var(--ink-2);
-}
-.homeatlas__title::before {
-  content: '';
-  width: 1.5rem;
-  height: 2px;
-  background: var(--accent);
-}
-.homeatlas__note {
-  margin: 0.625rem 0 0;
-  max-width: 68ch;
-  font: 400 0.8125rem/1.5 var(--font-data);
-  color: var(--ink-3);
-}
+/* ── Лид: первая строка ленты, набранная крупно ───────────────────────── */
+/* Раньше здесь стоял тёмный приборный щит со шкалой — отдельный материал
+   поверх ленты, из-за которого главный сюжет читался как баннер, а не как её
+   начало. Теперь лид — та же .story: та же бумага, та же заливка важности,
+   тот же волосок снизу. Выделен размером, а не сменой материала, и потому
+   фильтруется вместе со всеми и продолжается лентой без шва.
 
-.homeatlas .atlas__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(21rem, 1fr));
-  gap: 1.125rem 1.75rem;
-  align-items: start;
-}
-.homeatlas .atlas__region { margin-bottom: 0; }
-/* На главной страны — плитки по ширине названия, а не строки во всю колонку:
-   строками 89 стран уезжали на три экрана, и лента начиналась там, куда уже
-   не докручивают. В панели строки остаются — там колонка узкая. */
-.homeatlas .atlas__list {
-  columns: auto;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-}
-.homeatlas .atlas__cell { margin-top: 0; }
-.homeatlas .atlas__name { color: var(--ink-3); border-bottom-color: var(--rule); }
-.homeatlas .atlas__name a:hover, .homeatlas .atlas__name a.is-current { color: var(--accent); }
-.homeatlas .atlas__name b { color: var(--ink-3); }
-.homeatlas .atlas__cell a {
-  gap: 0.4375rem;
-  background: color-mix(in oklab, var(--fill) 62%, transparent);
-}
-.homeatlas .atlas__cell a:hover {
-  background: color-mix(in oklab, var(--fill) 85%, transparent);
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-/* На заливке ячейки счётчику нужен тон потемнее: --ink-3 на верхней ступени
-   не дотягивает до 4.5:1. */
-.homeatlas .atlas__cnum { color: var(--ink-2); }
-
-/* ── Лид: щит наблюдения ──────────────────────────────────────────────── */
-/* Лид продолжает консоль вниз — верх страницы остаётся одним тёмным телом,
-   и переход к светлой ленте работает разделителем сильнее любой линейки.
-   Координатная сетка — фон прибора; свечение берётся из --tier, то есть лид
-   светится ровно на свою величину. */
-.lead {
-  background:
-    radial-gradient(120% 100% at 8% 0%,
-      color-mix(in oklab, var(--ctier) 30%, transparent) 0%, transparent 60%),
-    repeating-linear-gradient(to right, rgb(255 255 255 / 3.5%) 0 1px, transparent 1px 44px),
-    repeating-linear-gradient(to bottom, rgb(255 255 255 / 3.5%) 0 1px, transparent 1px 44px),
-    var(--console);
-  color: var(--console-ink);
-}
-
-.lead__grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: clamp(1.25rem, 3vw, 2rem);
-  padding-block: clamp(2.25rem, 6vw, 4.5rem);
-}
-
-/* Отсчёт — приборная строка над заголовком. Число подписано словом: голая
-   цифра рядом с заголовком читалась как его номер, а не как величина. */
-.lead__gauge {
-  display: flex;
-  align-items: baseline;
-  gap: 0.75rem;
-  font-family: var(--font-data);
-}
-
-.lead__num {
-  font-size: clamp(3rem, 8vw, 4.75rem);
-  font-weight: 500;
-  line-height: 0.8;
-  letter-spacing: -0.05em;
-  color: var(--beam);
-  font-variant-numeric: tabular-nums;
-}
-.lead__cap {
-  font-size: 0.6875rem;
-  line-height: 1.35;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: var(--console-ink-2);
-}
-.lead__cap b { display: block; font-weight: 400; letter-spacing: 0.08em; }
-
-.lead__bar {
-  flex: 1 1 auto;
-  align-self: center;
-  max-width: 26rem;
-  height: 2px;
-  background: rgb(255 255 255 / 12%);
-  overflow: hidden;
-}
-.lead__bar i {
-  display: block;
-  height: 100%;
-  width: calc(var(--w) * 1%);
-  background: var(--beam);
-  box-shadow: 0 0 16px 1px var(--beam);
-  transform-origin: left;
-  animation: draw 0.7s cubic-bezier(0.16, 0.84, 0.28, 1) both;
+   Развёрнутого атласа на главной больше нет: 89 стран строками занимали
+   три экрана до первой новости. Атлас остался кнопкой в шапке — она видна
+   на каждой странице. */
+.story--lead {
+  padding-block: clamp(1.5rem, 3.5vw, 2.5rem) clamp(1.25rem, 3vw, 2rem);
 }
 
 .lead__eyebrow {
   display: flex;
   align-items: center;
   gap: 0.5625rem;
-  margin: 0 0 1rem;
+  margin: 0 0 0.875rem;
   font: 500 0.6875rem/1 var(--font-data);
   text-transform: uppercase;
   letter-spacing: 0.16em;
-  color: var(--console-ink-2);
+  color: var(--ink-2);
 }
+/* Штрих окрашен ступенью самого сюжета: подпись показывает ту же величину,
+   что и заливка под ней. */
 .lead__eyebrow::before {
   content: '';
   width: 1.5rem;
   height: 2px;
-  background: var(--beam);
-}
-/* Номер строки, а не украшение: дальше в ленте идут 2, 3, 4 — лид просто её
-   первая строка, только крупная. */
-.lead__eyebrow b {
-  font-weight: 400;
-  font-variant-numeric: tabular-nums;
-  color: var(--console-ink);
-  letter-spacing: 0.08em;
+  background: var(--tier);
 }
 
-/* Плакатный вес 900 здесь на месте: заголовок стоит на тёмном щите один и
-   держит весь верх страницы. Мера в 24 знака не даёт ему растечься. */
+/* Плакатный вес 900: заголовок держит весь верх страницы один. Мера в
+   24 знака не даёт ему растечься в строку на весь экран. */
 .lead__title {
   margin: 0;
-  max-width: 26ch;
-  font: 900 clamp(1.5rem, 3.6vw, 2.875rem)/1.06 var(--font-display);
-  letter-spacing: -0.035em;
+  max-width: 24ch;
+  font: 900 clamp(1.625rem, 4vw, 2.875rem)/1.04 var(--font-display);
+  letter-spacing: -0.04em;
   text-wrap: balance;
   overflow-wrap: anywhere;
 }
-/* Подчёркивание только по наведению: у восьмистрочного заголовка постоянная
-   линия под каждой строкой превращается в штриховку. */
-.lead__link { text-decoration: none; }
-.lead__link:hover { box-shadow: inset 0 -0.08em 0 var(--beam); }
 
-.lead__snippet {
-  margin: 1.25rem 0 0;
-  max-width: 56ch;
-  font-size: 1.0625rem;
-  color: var(--console-ink-2);
-}
-
-.lead__meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.375rem 1rem;
-  margin: 1.25rem 0 0;
-  font: 400 0.8125rem/1.4 var(--font-data);
-  color: var(--console-ink-2);
-}
-.lead__country { color: var(--console-ink); text-decoration-color: rgb(255 255 255 / 30%); }
+.story--lead .story__meta { margin-top: 0.75rem; font-size: 0.8125rem; }
+.story--lead .full,
+.story--lead .story__snippet { margin-top: 0.875rem; max-width: 54ch; }
+.story--lead .full__sum,
+.story--lead .story__snippet { font-size: 1.0625rem; }
+.story--lead .story__no { font-size: clamp(1.125rem, 2.4vw, 1.5rem); }
 
 .lead__ents {
   display: flex;
@@ -777,18 +632,71 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
 .lead__ents button {
   padding: 0.25rem 0.5625rem;
   font: 400 0.75rem var(--font-data);
-  color: var(--console-ink-2);
-  background: transparent;
-  border: 1px solid var(--console-rule);
+  color: var(--ink-2);
+  background: var(--panel);
+  border: 1px solid var(--rule);
   border-radius: var(--r);
   cursor: pointer;
-  transition: color 0.12s, border-color 0.12s, background 0.12s;
+  transition: color 0.12s, border-color 0.12s, transform 0.12s;
 }
 .lead__ents button:hover {
-  color: #0A1017;
-  background: var(--beam);
-  border-color: var(--beam);
+  color: var(--ink);
+  border-color: var(--accent);
+  transform: translateY(-1px);
 }
+
+/* ── Полный текст статьи ──────────────────────────────────────────────── */
+/* Кнопки «читать целиком» тут нет: кнопка — сама подводка, её многоточие и
+   есть обещание продолжения. Открытая, она уступает место тексту, а вместо
+   себя оставляет строку «свернуть» — иначе первые два абзаца стояли бы на
+   экране дважды. Всё на <details>, без единой строки JS. */
+.full {
+  margin-top: 0.625rem;
+  max-width: 60ch;
+}
+.full__sum {
+  font-size: 0.9375rem;
+  color: var(--ink-2);
+  cursor: pointer;
+  list-style: none;
+  transition: color 0.12s;
+}
+.full__sum::-webkit-details-marker { display: none; }
+.full__sum:hover { color: var(--ink); }
+/* Знак раскрытия — маленький треугольник вплотную к многоточию, а не
+   подчёркивание всей подводки: подчёркнутый абзац в каждой из ста строк
+   читается как сплошная ссылка. */
+.full__cut::after {
+  content: '▾';
+  margin-inline-start: 0.25em;
+  font-size: 0.75em;
+  color: var(--ink-3);
+}
+.full__sum:hover .full__cut::after { color: var(--ink); }
+
+.full__less {
+  display: none;
+  font: 400 0.75rem/1 var(--font-data);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-3);
+}
+.full[open] .full__cut { display: none; }
+.full[open] .full__less { display: inline-block; }
+
+.full__text {
+  margin-top: 0.75rem;
+  padding-inline-start: 0.9375rem;
+  border-inline-start: 2px solid var(--tier);
+  font-size: 0.9375rem;
+  color: var(--ink-2);
+}
+.full__text p { margin: 0 0 0.75rem; }
+.full__out {
+  font: 400 0.75rem var(--font-data);
+  color: var(--ink-3);
+}
+
 
 /* ── Заголовок ленты, ось, даты, фильтр ───────────────────────────────── */
 .board { padding-block: clamp(1.75rem, 4vw, 3rem); }
@@ -800,36 +708,43 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
 .board--feed { padding-block: 0 clamp(2rem, 5vw, 3.5rem); }
 .board--feed .feed { border-top: 1px solid var(--rule); }
 
-.board__head {
+/* ── Пульт: ось, даты и фильтр, свёрнутые в строку ────────────────────── */
+/* Три прибора занимали триста пикселей над лентой — на главной витрина
+   открывалась пультом вместо новостей. Свёрнуты в одну строку; открытое
+   состояние не запоминается и не должно: по умолчанию показана вся неделя,
+   и трогать полосу незачем. */
+.tools {
   max-width: var(--measure);
-  margin-bottom: 1.75rem;
+  margin-block: 1.25rem 1.5rem;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
 }
-.board__head--tight { margin-top: 2.25rem; }
-
-/* Секционный заголовок — мелкая моношрифтовая метка с янтарным штрихом:
-   разделы прибора подписаны, а не озаглавлены. */
-.board__title {
+.tools__sum {
   display: flex;
   align-items: center;
-  gap: 0.625rem;
-  margin: 0;
-  font: 500 0.75rem/1 var(--font-data);
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
+  gap: 0.5625rem;
+  padding: 0.5rem 0.8125rem;
+  font: 400 0.75rem/1.1 var(--font-data);
   color: var(--ink-2);
+  cursor: pointer;
+  list-style: none;
+  transition: color 0.12s;
 }
-.board__title::before {
-  content: '';
-  width: 1.5rem;
-  height: 2px;
-  background: var(--accent);
-}
-
-.board__note {
-  margin: 0.625rem 0 0;
-  max-width: 60ch;
-  font: 400 0.8125rem/1.5 var(--font-data);
-  color: var(--ink-3);
+.tools__sum::-webkit-details-marker { display: none; }
+.tools__sum:hover { color: var(--ink); }
+.tools__word { text-transform: uppercase; letter-spacing: 0.14em; }
+.tools__hint { color: var(--ink-3); }
+.tools[open] .tools__hint { visibility: hidden; }
+.tools__body { padding: 0 0.8125rem 1rem; }
+/* Внутри пульта приборы стоят на его же поле: своя рамка и своя подложка у
+   полосы дат превращали панель в коробку внутри коробки. */
+.tools__body .axis { margin-top: 0.5rem; }
+.tools__body .days {
+  margin-top: 1.125rem;
+  padding: 0;
+  background: none;
+  border: 0;
 }
 
 /* Ось. Ширина оси равна ширине ленты — деления стоят над теми же
@@ -901,7 +816,7 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
   font: 400 0.6875rem/1.2 var(--font-data);
   cursor: pointer;
 }
-.days__reset:hover { background: var(--accent); }
+.days__reset:hover { background: var(--ink-2); }
 /* Подсказка уступает место кнопке сброса: обе у правого края не нужны. */
 .days__top:has(.days__reset:not([hidden])) .days__hint { display: none; }
 
@@ -1249,23 +1164,16 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
 }
 
 /* ── Орнамент региона ─────────────────────────────────────────────────── */
-/* За названием региона и страны — геометрия его собственной орнаментальной
+/* За страницей страны и региона — геометрия его собственной орнаментальной
    традиции: джали, паранг, сэйгайха, гирих, зеллидж, кенте, ндебеле. Ровно
    на грани заметности (штрих в один пиксель, 4-6% краски) и монохромно, тем
    же чернилом, что и текст: это фактура бумаги, а не иллюстрация. Флагов,
    верблюдов и пирамид тут нет и не будет. Всё на градиентах — ни одного
-   лишнего запроса. */
-body[data-region] .page__head::before {
-  content: '';
-  position: absolute;
-  inset: -1.75rem -1rem 0;
-  z-index: -1;
-  background-image: var(--pat);
-  background-size: var(--pat-size, auto);
-  opacity: 0.5;
-  mask-image: linear-gradient(to bottom, transparent, #000 30%, #000 72%, transparent);
-  pointer-events: none;
-}
+   лишнего запроса.
+
+   Отдельного слоя под заголовком больше нет: он остался с тех пор, когда
+   орнамент жил только за шапкой. Теперь подложка одна на всю страницу, а два
+   слоя друг на друге в шапке только мутили заголовок. */
 body[data-region] {
   /* краска орнамента: чуть тёплое чернило, на тёмной теме — чуть холодное */
   --pi: color-mix(in oklab, var(--ink) 11%, transparent);
@@ -1506,7 +1414,7 @@ body[data-region='southern_africa'] {
   cursor: pointer;
 }
 .find__tag i { font-style: normal; opacity: 0.6; }
-.find__tag:hover { background: var(--accent); }
+.find__tag:hover { background: var(--ink-2); }
 .find__tag:hover i { opacity: 1; }
 
 /* Затравки: пока не набрано ни слова, показываем не «начните вводить», а тех,
@@ -1684,12 +1592,13 @@ body[data-region='southern_africa'] {
    длительность не нужна, поэтому его приходится отсекать здесь. */
 @supports (animation-timeline: view()) {
   @media (prefers-reduced-motion: no-preference) {
-    /* Строка ленты проявляется, входя в кадр. Диапазон короткий: строка должна
-       быть готова к чтению задолго до того, как встанет посреди экрана. */
-    .story, .chips__item, .homeatlas .atlas__region {
+    /* Строка ленты выплывает снизу и справа, входя в кадр: не просто
+       проявляется на месте, а доезжает до своего места. Диапазон короткий —
+       строка должна быть готова к чтению задолго до середины экрана. */
+    .story:not(.story--lead), .chips__item, .who__list li {
       animation: rise linear both;
       animation-timeline: view();
-      animation-range: entry 0% entry 34%;
+      animation-range: entry 0% entry 38%;
     }
 
     /* Орнамент региона идёт медленнее страницы — отсюда и глубина: слой за
@@ -1703,8 +1612,38 @@ body[data-region='southern_africa'] {
   }
 }
 
-@keyframes rise { from { opacity: 0; transform: translateY(1.5rem); } }
+@keyframes rise { from { opacity: 0; transform: translate(0.75rem, 2rem); } }
 @keyframes drift { to { transform: translateY(-14vh); } }
+
+/* Верх страницы таймлайну прокрутки недоступен: он уже в кадре, когда кадр
+   только появился, — и без этого лид, крошки и пульт единственные на витрине
+   возникали рывком. Здесь движение по времени, лесенкой сверху вниз. */
+@media (prefers-reduced-motion: no-preference) {
+  .crumbs, .page__head, .tools, .story--lead, .chips, .who {
+    animation: rise 0.62s cubic-bezier(0.16, 0.84, 0.28, 1) both;
+  }
+  .page__head, .story--lead { animation-delay: 0.06s; }
+  .chips, .who, .tools { animation-delay: 0.12s; }
+
+  /* Раскрытие <details> — тоже движение, а не подмена кадра. interpolate-size
+     нужен, чтобы высота ехала от нуля к auto; где его нет (все, кроме
+     Chromium), узел просто открывается сразу, как и открывался. */
+  @supports (interpolate-size: allow-keywords) {
+    :root { interpolate-size: allow-keywords; }
+    .full::details-content, .tools::details-content, .story__more::details-content {
+      block-size: 0;
+      overflow: clip;
+      opacity: 0;
+      transition: block-size 0.32s cubic-bezier(0.16, 0.84, 0.28, 1),
+                  opacity 0.24s ease,
+                  content-visibility 0.32s allow-discrete;
+      transition-behavior: allow-discrete;
+    }
+    .full[open]::details-content,
+    .tools[open]::details-content,
+    .story__more[open]::details-content { block-size: auto; opacity: 1; }
+  }
+}
 
 /* ── Фон страны и региона ─────────────────────────────────────────────── */
 /* Орнамент за шапкой был только за шапкой — прокрутил на экран вниз, и страна
@@ -1744,9 +1683,7 @@ body[data-region]::after {
 }
 
 @media print {
-  .top, .foot, .filter, .days, .theme, .atlas, .atlas__scrim, .find,
-  .homeatlas { display: none; }
+  .top, .foot, .tools, .theme, .atlas, .atlas__scrim, .find { display: none; }
   body { background: #fff; color: #000; margin: 0; }
   body[data-region]::before, body[data-region]::after { display: none; }
-  .lead { background: none; color: #000; }
 }

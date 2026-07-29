@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_story.html" import feed, legend, filter, dates %}
+{% from "_story.html" import feed, tools %}
 {% set current_region = region_slug %}
 {% set current_country = country %}
 
@@ -45,13 +45,7 @@
   </section>
   {% endif %}
 
-  {% if items %}
-  <div class="board__head board__head--tight">
-    {{ legend() }}
-    {{ dates(days) }}
-    {{ filter('Тема или издание') }}
-  </div>
-  {% endif %}
+  {% if items %}{{ tools(days, 'Тема или издание') }}{% endif %}
 
   {{ feed(items, False, 'За неделю ничего не набралось. Загляните позже.') }}
 </section>
