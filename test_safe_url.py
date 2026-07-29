@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """Проверка _safe_url: в href витрины попадают только http(s)-адреса.
 
-Запуск: python3 /opt/gdelt_rss/test_safe_url.py
+Запуск: /opt/gdelt_rss/venv/bin/python /opt/gdelt_rss/test_safe_url.py
+(именно из venv — site.py тянет numpy через importance.py)
 Падает, если "javascript:"/"data:" снова смогут доехать из GDELT в разметку.
 """
 import importlib.util
