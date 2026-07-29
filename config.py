@@ -29,3 +29,35 @@ PROXIES = None
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+
+# Ключи не должны попадать в логи: исключения requests/httpx стрингуют полный
+# URL и заголовки. Подмена фабрики записей глобальна — чистится каждая запись
+# любого логгера в процессе. То же самое стоит в /opt/digest/config.py.
+_SECRETS = [OPENROUTER_API_KEY, GROQ_API_KEY, GOOGLE_API_KEY]
+
+
+def _install_secret_redaction() -> None:
+    import logging
+
+    secrets = [s for s in _SECRETS if s and len(s) >= 8]
+    if not secrets:
+        return
+    original_factory = logging.getLogRecordFactory()
+
+    def factory(*args, **kwargs):
+        record = original_factory(*args, **kwargs)
+        try:
+            message = record.getMessage()
+        except Exception:
+            return record
+        cleaned = message
+        for secret in secrets:
+            cleaned = cleaned.replace(secret, "***REDACTED***")
+        if cleaned != message:
+            record.msg, record.args = cleaned, ()
+        return record
+
+    logging.setLogRecordFactory(factory)
+
+
+_install_secret_redaction()
