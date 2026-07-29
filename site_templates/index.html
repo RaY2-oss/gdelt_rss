@@ -1,9 +1,47 @@
 {% extends "base.html" %}
 {% from "_story.html" import story, feed, legend, filter, dates %}
+{% from "_atlas.html" import atlas_grid %}
 
 {% block content %}
+{# Атлас развёрнут прямо на главной и стоит первым: боковая панель это та же
+   таблица, но за лишним нажатием, а первый вопрос к витрине 89 стран — «что
+   вообще есть». Пролистал мимо — в шапке проявляется кнопка (app.js). #}
+<section class="homeatlas" data-atlas-anchor>
+  <div class="wrap">
+    <div class="homeatlas__top">
+      <h2 class="homeatlas__title">Охват</h2>
+      <p class="homeatlas__note">
+        {{ status.countries }} {{ status.countries|plural('страна','страны','стран') }} на связи ·
+        заливка — важность верхнего сюжета, число — сколько сюжетов за
+        {{ status.days }} {{ status.days|plural('день','дня','дней') }}
+      </p>
+    </div>
+    {{ atlas_grid(regions) }}
+  </div>
+</section>
+
+{# Пульт ленты стоит НАД первым сюжетом, а не между ним и остальными. Раньше
+   ось, даты и фильтр вклинивались следом за лидом, и лента начиналась со
+   второго номера через двести пикселей приборов — читалось как две разные
+   ленты. Теперь лид это просто её первая строка, только крупная: он и
+   фильтруется вместе со всеми (data-day, data-score, data-find). #}
+<section class="board wrap">
+  <div class="board__head">
+    <h2 class="board__title">Лента</h2>
+    <p class="board__note">
+      {{ total }} {{ total|plural('сюжет','сюжета','сюжетов') }} за {{ status.days }} {{ status.days|plural('день','дня','дней') }} ·
+      показаны {{ items|length + 1 }} по убыванию важности
+    </p>
+    {{ legend() }}
+    {{ dates(days) }}
+    {{ filter('Тема, страна или издание') }}
+  </div>
+</section>
+
 {% if lead %}
-<section class="lead" style="--w: {{ lead.score }}" data-tier="{{ lead.tier }}">
+<section class="lead" style="--w: {{ lead.score }}" data-tier="{{ lead.tier }}"
+         data-score="{{ lead.score }}" data-day="{{ lead.day }}"
+         data-find="{{ lead.title|lower }} {{ lead.country_ru|lower }} {{ lead.domain }}">
   <div class="wrap lead__grid">
     <div class="lead__gauge">
       <span class="lead__num">{{ lead.score }}</span>
@@ -12,7 +50,7 @@
     </div>
 
     <div class="lead__body">
-      <p class="lead__eyebrow">Верх недели</p>
+      <p class="lead__eyebrow">Верх недели<b>01</b></p>
       <h1 class="lead__title">
         <a class="lead__link" href="{{ lead.url }}" rel="noopener nofollow" {% if lead.lang_code %}lang="{{ lead.lang_code }}"{% endif %}>{{ lead.title }}</a>
       </h1>
@@ -26,7 +64,7 @@
       </p>
       {% if lead_ents %}
       <ul class="lead__ents">
-        {% for e in lead_ents %}<li>{{ e }}</li>{% endfor %}
+        {% for e in lead_ents %}<li><button type="button" data-seed="{{ e.key }}">{{ e.name }}</button></li>{% endfor %}
       </ul>
       {% endif %}
     </div>
@@ -34,18 +72,7 @@
 </section>
 {% endif %}
 
-<section class="board wrap">
-  <div class="board__head">
-    <h2 class="board__title">Лента</h2>
-    <p class="board__note">
-      {{ total }} {{ total|plural('сюжет','сюжета','сюжетов') }} за {{ status.days }} {{ status.days|plural('день','дня','дней') }} ·
-      показаны {{ items|length + 1 }} по убыванию важности
-    </p>
-    {{ legend() }}
-    {{ dates(days) }}
-    {{ filter('Тема, страна или издание') }}
-  </div>
-
+<section class="board board--feed wrap">
   {{ feed(items, True, 'За неделю ничего не набралось.', 2) }}
 </section>
 {% endblock %}

@@ -1,6 +1,7 @@
-// Пять мелочей, ради которых не нужен фреймворк: атлас, переход к стране,
-// полоса дат, фильтр по ленте и переключатель темы. Всё остальное на
-// странице — статический HTML.
+// Шесть мелочей, ради которых не нужен фреймворк: атлас, поиск по всему
+// корпусу, полоса дат, фильтр по видимой ленте, переключатель темы и кнопка
+// атласа, проявляющаяся после прокрутки. Всё остальное на странице —
+// статический HTML, а движение — на CSS (см. animation-timeline в style.css).
 (function () {
   'use strict';
 
@@ -8,6 +9,12 @@
   var q$ = function (s) { return document.querySelector(s); };
   var all = function (s) {
     return Array.prototype.slice.call(document.querySelectorAll(s));
+  };
+  var el = function (tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
   };
 
   // Полоса дат и фильтр по слову режут одну и ту же ленту, поэтому и решение
@@ -17,75 +24,263 @@
   var dayPass = null; // null — все дни
 
   // ── Атлас ─────────────────────────────────────────────────────────────
+  // Панель ложится поверх страницы и ничего не двигает, поэтому и состояние
+  // между страницами не помнится: открытый по памяти атлас закрывал бы ленту
+  // на каждом переходе.
   var atlas = document.getElementById('atlas');
   var atlasBtn = q$('.atlas-btn');
   var scrim = q$('.atlas__scrim');
-  var wide = window.matchMedia('(min-width: 64rem)');
+
+  var setAtlas = function (open) {
+    root.classList.toggle('is-atlas', open);
+    if (atlasBtn) atlasBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (atlas) atlas.setAttribute('aria-hidden', open ? 'false' : 'true');
+    if (scrim) scrim.hidden = !open;
+  };
 
   if (atlas && atlasBtn) {
-    var setAtlas = function (open) {
-      root.classList.toggle('is-atlas', open);
-      atlasBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
-      atlas.setAttribute('aria-hidden', open ? 'false' : 'true');
-      if (scrim) scrim.hidden = !open;
-      // Помним только на широком экране: там атлас сдвигает страницу и жить с
-      // ним можно. На узком он ложится поверх — открывать его на каждой
-      // странице заново значило бы прятать саму ленту.
-      try { if (wide.matches) localStorage.setItem('atlas', open ? '1' : '0'); } catch (e) {}
-    };
-
     atlasBtn.addEventListener('click', function () {
       setAtlas(!root.classList.contains('is-atlas'));
     });
     if (scrim) scrim.addEventListener('click', function () { setAtlas(false); });
     var closeBtn = q$('.atlas__close');
     if (closeBtn) closeBtn.addEventListener('click', function () { setAtlas(false); });
-
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && root.classList.contains('is-atlas')) setAtlas(false);
-    });
-
-    // Экран сузили при открытом атласе — сдвиг пропал, накрытие появилось.
-    wide.addEventListener('change', function () {
-      if (root.classList.contains('is-atlas')) setAtlas(true);
-    });
-
-    // Состояние восстановил inline-скрипт в <head> (до отрисовки), кнопке и
-    // затемнению об этом ещё не сказали.
-    setAtlas(root.classList.contains('is-atlas'));
   }
 
-  // ── Переход к стране ──────────────────────────────────────────────────
-  var nav = window.__NAV__ || [];
-  var jump = document.getElementById('jump');
-  var list = document.getElementById('countries');
+  // Кнопка атласа в шапке нужна не всегда: на главной сам атлас развёрнут в
+  // начале страницы, и пока он на виду, кнопка — второй экземпляр того же.
+  // Ушёл за верхний край — проявляем.
+  var anchor = q$('[data-atlas-anchor]');
+  if (anchor && window.IntersectionObserver) {
+    root.classList.add('is-atlasnear');
+    new IntersectionObserver(function (rows) {
+      root.classList.toggle('is-atlasnear', rows[0].isIntersecting);
+    }, { rootMargin: '-20% 0px 0px 0px' }).observe(anchor);
+  }
 
-  if (jump && list) {
-    nav.forEach(function (c) {
-      var o = document.createElement('option');
-      o.value = c.n;
-      o.label = c.r;
-      list.appendChild(o);
-    });
+  // ── Поиск по всему корпусу ────────────────────────────────────────────
+  // На странице лежит только её лента, а искать хочется по всей неделе,
+  // поэтому корпус приезжает отдельным файлом — но лениво, по первому
+  // касанию: тем, кто просто читает, он не стоит ничего.
+  //
+  // Группировка (страна, объект, дата) не отдельный экран «расширенный
+  // поиск», а полоски под строкой: они считаются по тому, что уже нашлось, и
+  // показывают только то, чем эту выборку и правда можно сузить.
+  var find = document.getElementById('find');
+  var findBtn = q$('.jump');
 
-    var go = function () {
-      var v = jump.value.trim().toLowerCase();
-      if (!v) return;
-      var hit = nav.find(function (c) { return c.n.toLowerCase() === v; }) ||
-                nav.find(function (c) { return c.n.toLowerCase().indexOf(v) === 0; });
-      if (hit) location.href = hit.u;
+  if (find && findBtn) {
+    var input = find.querySelector('.find__input');
+    var listBox = find.querySelector('[data-find-list]');
+    var groupBox = find.querySelector('[data-find-groups]');
+    var tagBox = find.querySelector('[data-find-tags]');
+    var seedBox = find.querySelector('[data-find-seeds]');
+    var statBox = find.querySelector('[data-find-stat]');
+
+    var IDX = null, pending = null;
+    var st = { q: '', c: null, e: null, d: null };
+    var LIMIT = 60;
+
+    var load = function () {
+      if (IDX) return Promise.resolve(IDX);
+      if (!pending) {
+        pending = fetch('/search.json').then(function (r) { return r.json(); })
+          .then(function (j) {
+            // Один плоский стог на запись: страна и домен ищутся тем же
+            // подстрочным поиском, что и заголовок, — отдельные поля дали бы
+            // три прохода вместо одного.
+            j.hay = j.s.map(function (s) {
+              return (s[0] + ' ' + j.c[s[1]][1] + ' ' + s[5] + ' ' + s[6]).toLowerCase();
+            });
+            IDX = j;
+            return j;
+          });
+      }
+      return pending;
     };
 
-    // change ловит выбор из datalist мышью, keydown — ввод с клавиатуры
-    jump.addEventListener('change', go);
-    jump.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') { e.preventDefault(); go(); }
+    var entName = function (key) {
+      return (IDX && IDX.n && IDX.n[key]) || key.replace(/(^|[\s-])\S/g, function (m) {
+        return m.toUpperCase();
+      });
+    };
+
+    var hits = function () {
+      var q = st.q.trim().toLowerCase();
+      var out = [];
+      for (var i = 0; i < IDX.s.length; i++) {
+        var s = IDX.s[i];
+        if (st.c && st.c.indexOf(s[1]) < 0) continue;
+        if (st.d != null && s[2] !== st.d) continue;
+        if (st.e && (';' + s[6] + ';').indexOf(';' + st.e + ';') < 0) continue;
+        if (q && IDX.hay[i].indexOf(q) < 0) continue;
+        out.push(s);
+      }
+      return out;
+    };
+
+    var tier = function (score) {
+      return score >= 85 ? 4 : score >= 70 ? 3 : score >= 50 ? 2 : score >= 30 ? 1 : 0;
+    };
+
+    // Полоска фасета: подпись, число и снятие по повторному нажатию.
+    var group = function (title, pairs, pick) {
+      if (pairs.length < 2) return;
+      var box = el('div', 'find__group');
+      box.appendChild(el('span', 'find__gcap', title));
+      pairs.slice(0, 8).forEach(function (p) {
+        var b = el('button', 'find__gbtn', p.label);
+        b.type = 'button';
+        b.appendChild(el('b', null, p.n));
+        b.addEventListener('click', function () { pick(p.value); render(); });
+        box.appendChild(b);
+      });
+      groupBox.appendChild(box);
+    };
+
+    var facets = function (rows) {
+      groupBox.textContent = '';
+      var byC = {}, byE = {}, byD = {};
+      rows.forEach(function (s) {
+        byC[s[1]] = (byC[s[1]] || 0) + 1;
+        byD[s[2]] = (byD[s[2]] || 0) + 1;
+        s[6].split(';').forEach(function (e) { if (e) byE[e] = (byE[e] || 0) + 1; });
+      });
+      var top = function (obj, label, min) {
+        return Object.keys(obj).filter(function (k) { return obj[k] >= (min || 1); })
+          .sort(function (a, b) { return obj[b] - obj[a]; })
+          .map(function (k) { return { value: k, n: obj[k], label: label(k) }; });
+      };
+
+      if (!st.c) group('Страна', top(byC, function (k) { return IDX.c[k][1]; }), function (v) {
+        st.c = [+v];
+      });
+      if (!st.e) group('Объект', top(byE, entName, 2), function (v) { st.e = v; });
+      // Даты — по календарю, а не по числу сюжетов: полоска дат читается
+      // как ось, и «01.01» между «27.07» и «25.07» сбивает счёт.
+      if (st.d == null) group('Дата', top(byD, function (k) { return IDX.d[k].slice(5).split('-').reverse().join('.'); })
+        .sort(function (a, b) { return b.value - a.value; }),
+        function (v) { st.d = +v; });
+      groupBox.hidden = !groupBox.firstChild;
+    };
+
+    var tags = function () {
+      tagBox.textContent = '';
+      var add = function (label, drop) {
+        var b = el('button', 'find__tag', label);
+        b.type = 'button';
+        b.appendChild(el('i', null, '×'));
+        b.addEventListener('click', function () { drop(); render(); });
+        tagBox.appendChild(b);
+      };
+      if (st.c) add(st.c.length > 1 ? st.c.length + ' стран' : IDX.c[st.c[0]][1],
+                    function () { st.c = null; });
+      if (st.e) add(entName(st.e), function () { st.e = null; });
+      if (st.d != null) add(IDX.d[st.d], function () { st.d = null; });
+      tagBox.hidden = !tagBox.firstChild;
+    };
+
+    var render = function () {
+      if (!IDX) return;
+      var rows = hits();
+      var narrowed = st.q.trim() || st.c || st.e || st.d != null;
+      if (seedBox) seedBox.hidden = !!narrowed;
+      tags();
+      // Пока ничего не сужено, фасеты — копия затравок; показываем их с первого
+      // введённого слова.
+      facets(narrowed ? rows : []);
+
+      listBox.textContent = '';
+      rows.slice(0, LIMIT).forEach(function (s) {
+        var li = el('li', 'find__row');
+        li.style.setProperty('--w', s[3]);
+        li.dataset.tier = tier(s[3]);
+        var a = el('a', 'find__link', s[0]);
+        a.href = s[4];
+        a.rel = 'noopener nofollow';
+        li.appendChild(a);
+        var meta = el('p', 'find__meta');
+        meta.appendChild(el('span', 'find__score', s[3]));
+        meta.appendChild(el('span', null, IDX.c[s[1]][1]));
+        meta.appendChild(el('span', null, s[5]));
+        meta.appendChild(el('span', null, IDX.d[s[2]].slice(5).split('-').reverse().join('.')));
+        li.appendChild(meta);
+        listBox.appendChild(li);
+      });
+
+      statBox.textContent = !narrowed ? IDX.s.length + ' сюжетов за неделю'
+        : rows.length ? (rows.length > LIMIT ? 'Первые ' + LIMIT + ' из ' + rows.length
+                                             : 'Нашлось: ' + rows.length)
+        : 'Ничего не нашлось. Снимите один из фильтров или попробуйте другое слово.';
+    };
+
+    // Каждое открытие начинается с чистого листа. Иначе поиск, закрытый с
+    // тремя фасетами, открывался бы с ними же — и на пустой запрос показывал
+    // «ничего не нашлось», не объясняя, что ищет он вовсе не то, что набрано.
+    var open = function (seed, scoped) {
+      find.hidden = false;
+      root.classList.add('is-find');
+      findBtn.setAttribute('aria-expanded', 'true');
+      st = { q: '', c: null, e: null, d: null };
+      input.value = '';
+      load().then(function () {
+        if (seed) st.e = seed;
+        // «С учётом страницы»: объект со страницы страны ищется в её пределах,
+        // со страницы региона — в пределах его стран. Иначе нажатие на имя в
+        // блоке «кто в новостях» уводило бы из страны в мир.
+        if (scoped) {
+          var c = document.body.dataset.country, r = document.body.dataset.region, i;
+          if (c) {
+            for (i = 0; i < IDX.c.length; i++) if (IDX.c[i][0] === c) st.c = [i];
+          } else if (r) {
+            for (i = 0; i < IDX.g.length; i++) if (IDX.g[i][0] === r) st.c = IDX.g[i][2];
+          }
+        }
+        render();
+        input.focus();
+      });
+    };
+
+    var close = function () {
+      find.hidden = true;
+      root.classList.remove('is-find');
+      findBtn.setAttribute('aria-expanded', 'false');
+    };
+
+    findBtn.addEventListener('click', function () { open(); });
+    find.querySelector('.find__close').addEventListener('click', close);
+    find.addEventListener('click', function (e) { if (e.target === find) close(); });
+
+    input.addEventListener('input', function () { st.q = input.value; render(); });
+
+    // Затравки: имена под строкой, объекты лида, имена в «кто в новостях».
+    document.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-seed]') : null;
+      if (b) { open(b.dataset.seed, 'seedScope' in b.dataset); return; }
+      if (e.target.closest && e.target.closest('[data-find-open]')) {
+        var f = q$('[data-filter]');
+        open();
+        if (f && f.value) { st.q = f.value; input.value = f.value; render(); }
+      }
+    });
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        if (root.classList.contains('is-find')) close();
+        else if (root.classList.contains('is-atlas')) setAtlas(false);
+        return;
+      }
+      var tag = (e.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea') return;
+      if (e.key === '/' || ((e.metaKey || e.ctrlKey) && e.key === 'k')) {
+        e.preventDefault();
+        open();
+      }
     });
   }
 
-  var stories = all('.story');
-
   // ── Полоса дат: фильтр, который заодно график ─────────────────────────
+  var stories = all('.story, .lead[data-day]');
   var strip = q$('[data-days]');
   var btns = all('.days__btn');
 
@@ -95,8 +290,8 @@
     // Гистограмма считается по самой ленте, а не приезжает из сборщика:
     // цифра под столбиком и число строк после фильтра не могут разойтись.
     var per = {};
-    stories.forEach(function (el) {
-      var d = el.dataset.day;
+    stories.forEach(function (n) {
+      var d = n.dataset.day;
       per[d] = (per[d] || 0) + 1;
     });
     var peak = 1;
@@ -123,8 +318,7 @@
     };
 
     var span = function () {
-      var on = btns.filter(function (b) { return b.classList.contains('is-on'); });
-      return on.length;
+      return btns.filter(function (b) { return b.classList.contains('is-on'); }).length;
     };
 
     // Клик — один день; повторный клик по нему же — снова вся неделя.
@@ -169,40 +363,29 @@
     if (reset) reset.addEventListener('click', function () { mark(0, btns.length - 1); });
   }
 
-  // ── Фильтр по ленте: слово + порог важности + даты ────────────────────
-  var input = q$('[data-filter]');
+  // ── Фильтр по видимой ленте: слово + даты ─────────────────────────────
+  var word = q$('[data-filter]');
   var counter = q$('[data-filter-count]');
   var none = q$('.feed__none');
-  var views = all('[data-view]');
 
   if (stories.length) {
-    var floor = 0;
     apply = function () {
-      var v = input ? input.value.trim().toLowerCase() : '';
+      var v = word ? word.value.trim().toLowerCase() : '';
       var shown = 0;
-      stories.forEach(function (el) {
-        var hit = (!v || el.dataset.find.indexOf(v) !== -1) &&
-                  (+el.dataset.score || 0) >= floor &&
-                  (!dayPass || dayPass.indexOf(el.dataset.day) !== -1);
-        el.hidden = !hit;
+      stories.forEach(function (n) {
+        var hit = (!v || (n.dataset.find || '').indexOf(v) !== -1) &&
+                  (!dayPass || dayPass.indexOf(n.dataset.day) !== -1);
+        n.hidden = !hit;
         if (hit) shown++;
       });
-      var narrowed = v || floor || dayPass;
+      var narrowed = v || dayPass;
       if (counter) counter.textContent = narrowed ? shown + ' из ' + stories.length : '';
       if (none) none.hidden = !narrowed || shown > 0;
     };
 
-    views.forEach(function (b) {
-      b.addEventListener('click', function () {
-        floor = +b.dataset.view || 0;
-        views.forEach(function (o) { o.classList.toggle('is-on', o === b); });
-        apply();
-      });
-    });
-
-    if (input) input.addEventListener('input', apply);
+    if (word) word.addEventListener('input', apply);
     // страница могла восстановиться из bfcache с непустым полем
-    if (input && input.value) apply();
+    if (word && word.value) apply();
   }
 
   // ── Тема ──────────────────────────────────────────────────────────────

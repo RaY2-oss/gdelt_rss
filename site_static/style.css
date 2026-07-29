@@ -19,7 +19,9 @@
   --panel-sunk: #DDE2E9; --panel-sunk: light-dark(#DDE2E9, #111823);
   --ink: #0C1017;       --ink: light-dark(#0C1017, #E9EDF2);
   --ink-2: #414B59;     --ink-2: light-dark(#414B59, #A2ACBB);
-  --ink-3: #5C6674;     --ink-3: light-dark(#5C6674, #7F8998);
+  /* --ink-3 сдвинут от фона на полтона: он держит выходные данные строки, а те
+     стоят не на чистой бумаге, а на заливке важности. */
+  --ink-3: #545E6C;     --ink-3: light-dark(#545E6C, #8A94A3);
   --rule: #CFD6DE;      --rule: light-dark(#CFD6DE, #1A2230);
   --rule-strong: #A9B3BF; --rule-strong: light-dark(#A9B3BF, #2C3647);
   --track: #D5DBE3;     --track: light-dark(#D5DBE3, #151C27);
@@ -43,6 +45,32 @@
   --sig-3: #1E4C88;     --sig-3: light-dark(#1E4C88, #7CB8EE);
   --sig-4: #10306A;     --sig-4: light-dark(#10306A, #B6DCFF);
 
+  /* Заливка — отдельный ряд, и вот почему. Полоса важности красит фон ПОД
+     текстом, а --sig идёт навстречу теме: на светлой теме верх шкалы уходит в
+     почти чёрную синь, на тёмной — в почти белую. Выходные данные строки
+     (--ink-3) на заливке верхней ступени давали 2.5:1 — текст и правда терялся,
+     причём тем сильнее, чем сюжет важнее.
+
+     Заливка вместо этого держится светлоты фона и меняет только цветность:
+     на светлой теме голубеет вверх, на тёмной синеет вниз. Ступени различимы,
+     а слабейший текст держит ≥4.5:1 на любой ступени в обеих темах (замер —
+     scratchpad/contrast.mjs). Величину продолжает нести --sig: двухпиксельная
+     кромка слева и мера в строке выходных данных. */
+  --fill-0: #E3E9EF;    --fill-0: light-dark(#E3E9EF, #0C1622);
+  --fill-1: #D3E2F4;    --fill-1: light-dark(#D3E2F4, #0E2138);
+  --fill-2: #C2DBF9;    --fill-2: light-dark(#C2DBF9, #112C4E);
+  --fill-3: #B1D4FD;    --fill-3: light-dark(#B1D4FD, #143764);
+  --fill-4: #A2CEFF;    --fill-4: light-dark(#A2CEFF, #17427A);
+
+  /* Консоль тёмная в обеих темах, поэтому шкале на ней тему знать не нужно:
+     иначе на светлой теме ячейка атласа с максимумом уходила в чёрный, а с
+     нулём — светилась, и карта охвата читалась наизнанку. */
+  --csig-0: #1B2C44;
+  --csig-1: #2B5583;
+  --csig-2: #4A8AC8;
+  --csig-3: #7CB8EE;
+  --csig-4: #B6DCFF;
+
   /* Янтарь — интерфейс, а не данные: подписи разделов, наведение, фокус.
      Разведён со шкалой намеренно, чтобы «жёлтое» нигде не означало величину.
      --beam живёт только на тёмной консоли, --accent — на светлом поле. */
@@ -64,8 +92,10 @@
   --measure: 60rem;
   --pad: clamp(1rem, 4vw, 2.5rem);
 
-  /* Ширина атласа. Ею же сдвигается страница, когда он открыт. */
-  --atlas-w: 21rem;
+  /* Атлас шире прежнего: 89 стран в одну колонку уходили на три экрана вниз,
+     и Океания жила там, куда не докручивают. Страны внутри региона стоят в
+     две колонки — сетка стала вдвое короче при той же плотности. */
+  --atlas-w: 27rem;
 
   /* Радиус почти нулевой: у приборной панели скруглений не бывает, но и
      совсем острые углы уводят в газетную вёрстку. */
@@ -77,12 +107,24 @@
 :root[data-theme='light'] { color-scheme: light; }
 :root[data-theme='dark'] { color-scheme: dark; }
 
-/* Ступень шкалы → цвет. Ставится на .story / .lead / .atlas__cell / .chips__item. */
-[data-tier='0'] { --tier: var(--sig-0); }
-[data-tier='1'] { --tier: var(--sig-1); }
-[data-tier='2'] { --tier: var(--sig-2); }
-[data-tier='3'] { --tier: var(--sig-3); }
-[data-tier='4'] { --tier: var(--sig-4); }
+/* Ступень шкалы → цвет. Ставится на .story / .lead / .atlas__cell / .chips__item.
+   Три ряда сразу: --tier красит линии и меры, --fill — фон под текстом,
+   --ctier — то же на всегда тёмной консоли. */
+[data-tier='0'] { --tier: var(--sig-0); --fill: var(--fill-0); --ctier: var(--csig-0); }
+[data-tier='1'] { --tier: var(--sig-1); --fill: var(--fill-1); --ctier: var(--csig-1); }
+[data-tier='2'] { --tier: var(--sig-2); --fill: var(--fill-2); --ctier: var(--csig-2); }
+[data-tier='3'] { --tier: var(--sig-3); --fill: var(--fill-3); --ctier: var(--csig-3); }
+[data-tier='4'] { --tier: var(--sig-4); --fill: var(--fill-4); --ctier: var(--csig-4); }
+
+/* Полоса дат прячет строки через [hidden], а у строки ленты свой display:
+   grid — авторское правило бьёт браузерное по происхождению, а не по весу,
+   поэтому спрятанное оставалось на экране. Одно !important дешевле, чем
+   держать :not([hidden]) во всех правилах ленты. */
+[hidden] { display: none !important; }
+
+/* Переходы между страницами. Одна строка вместо роутера: браузер сам сшивает
+   уход и приход, ссылки остаются обычными ссылками. */
+@view-transition { navigation: auto; }
 
 /* ── База ─────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
@@ -100,7 +142,6 @@ body {
   /* заголовки приходят из чужой прессы: бывает сплошной URL вместо заголовка
      и очень длинные токены без пробелов — иначе они рвут узкий экран */
   overflow-wrap: break-word;
-  transition: margin-inline-start 0.26s cubic-bezier(0.16, 0.84, 0.28, 1);
 }
 
 a { color: inherit; }
@@ -170,10 +211,28 @@ a { color: inherit; }
   border-radius: var(--r);
   font: 400 0.8125rem/1 var(--font-data);
   cursor: pointer;
-  transition: border-color 0.12s, background 0.12s;
+  transition: border-color 0.12s, background 0.12s,
+              opacity 0.28s ease, transform 0.28s cubic-bezier(0.16, 0.84, 0.28, 1),
+              max-width 0.28s cubic-bezier(0.16, 0.84, 0.28, 1), padding 0.28s, margin 0.28s;
+  max-width: 12rem;
+  overflow: hidden;
+  white-space: nowrap;
 }
 .atlas-btn:hover { border-color: var(--beam); }
 .atlas-btn[aria-expanded='true'] { background: var(--beam); color: #0A1017; border-color: var(--beam); }
+
+/* Пока развёрнутый атлас главной на виду, кнопка в шапке — его второй
+   экземпляр: она сворачивается влево и уступает место знаку. Ушёл атлас за
+   верхний край — кнопка выезжает обратно (класс ставит app.js). */
+html.is-atlasnear .atlas-btn {
+  max-width: 0;
+  padding-inline: 0;
+  margin-inline-end: -0.5rem;
+  border-color: transparent;
+  opacity: 0;
+  transform: translateX(-0.75rem);
+  pointer-events: none;
+}
 
 /* Три штриха разной длины — те же, что в знаке: атлас и есть карта охвата. */
 .atlas-btn__bars {
@@ -266,22 +325,61 @@ a { color: inherit; }
   .jump { margin-inline-start: auto; }
 }
 
-.jump { position: relative; flex: 0 1 auto; min-width: 0; }
-.jump__label { position: absolute; left: -9999px; }
-.jump__input {
-  width: 10.5rem;
-  max-width: 100%;
+/* Не поле, а кнопка: корпус недели лежит отдельным файлом и приезжает по
+   первому нажатию, так что поле в шапке всё равно ничего бы не искало, пока
+   не загрузится. Кнопка честнее — и открывает слой, где есть место фасетам. */
+.jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 1 auto;
+  min-width: 0;
   height: 2rem;
-  padding: 0 0.6875rem;
-  font: 400 0.8125rem var(--font-data);
-  color: var(--console-ink);
+  padding: 0 0.5rem 0 0.6875rem;
   background: var(--console-2);
+  color: var(--console-ink-2);
   border: 1px solid var(--console-rule);
   border-radius: var(--r);
-  transition: border-color 0.12s;
+  font: 400 0.8125rem/1 var(--font-data);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
 }
-.jump__input::placeholder { color: var(--console-ink-2); }
-.jump__input:hover, .jump__input:focus { border-color: var(--beam); }
+.jump:hover { border-color: var(--beam); color: var(--console-ink); }
+
+.jump__ico {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  position: relative;
+}
+.jump__ico::after {
+  content: '';
+  position: absolute;
+  right: -3.5px;
+  bottom: -3.5px;
+  width: 5px;
+  height: 1.5px;
+  background: currentColor;
+  transform: rotate(45deg);
+}
+
+.jump__word { overflow: hidden; text-overflow: ellipsis; }
+
+.jump__kbd {
+  flex: none;
+  padding: 0.0625rem 0.3125rem;
+  border: 1px solid var(--console-rule);
+  border-radius: var(--r);
+  font: 400 0.6875rem/1.4 var(--font-data);
+}
+@media (max-width: 60rem) { .jump__kbd { display: none; } }
+@media (max-width: 44rem) {
+  .jump__word { position: absolute; left: -9999px; }
+  .jump { padding-inline: 0.5rem; }
+}
 
 .theme {
   flex: none;
@@ -313,8 +411,9 @@ a { color: inherit; }
 /* ── Атлас: выдвижная карта охвата ────────────────────────────────────── */
 /* Таблица 89 стран с числом сюжетов раньше лежала внизу главной и на странице
    «о проекте» — то есть ровно там, где до неё не доходили. Теперь она
-   выезжает с любой страницы и сдвигает содержимое вбок, а не накрывает его:
-   видно, откуда ушёл и куда вернёшься. */
+   выезжает с любой страницы поверх содержимого. Страницу она больше не
+   сдвигает: сдвиг уводил из-под курсора ровно ту строку, ради которой атлас и
+   открывали, и на широком экране страница ощутимо прыгала. */
 .atlas {
   position: fixed;
   inset: 0 auto 0 0;
@@ -324,9 +423,10 @@ a { color: inherit; }
   background: var(--console);
   color: var(--console-ink);
   border-inline-end: 1px solid var(--console-rule);
+  box-shadow: 0 0 3rem rgb(0 0 0 / 45%);
   transform: translateX(-100%);
   visibility: hidden;
-  transition: transform 0.26s cubic-bezier(0.16, 0.84, 0.28, 1), visibility 0.26s;
+  transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1), visibility 0.34s;
   overscroll-behavior: contain;
 }
 .atlas__inner {
@@ -337,42 +437,55 @@ a { color: inherit; }
 }
 
 html.is-atlas .atlas { transform: none; visibility: visible; }
-@media (min-width: 64rem) {
-  html.is-atlas body { margin-inline-start: var(--atlas-w); }
-}
 
-/* Затемнение только там, где страница не сдвигается: иначе оно гасило бы то,
-   ради чего сдвиг и делался. */
+/* Панель едет вбок, а её содержимое ещё и проявляется с небольшим отставанием:
+   иначе на широкой панели видно, как текст «приезжает» вместе с фоном. */
+.atlas__inner > * {
+  opacity: 0;
+  transform: translateX(-0.75rem);
+  transition: opacity 0.24s ease 0.06s, transform 0.24s ease 0.06s;
+}
+html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
+
 .atlas__scrim {
   position: fixed;
   inset: 0;
   z-index: 35;
   background: rgb(5 9 14 / 55%);
+  backdrop-filter: blur(2px);
+  animation: fade 0.24s ease both;
 }
-@media (min-width: 64rem) { .atlas__scrim { display: none; } }
 
 .atlas__head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 0.75rem;
-  padding-bottom: 0.875rem;
+  padding-bottom: 0.75rem;
   border-bottom: 1px solid var(--console-rule);
 }
-
-/* Ссылка на главную — первой строкой и целым блоком, а не словом в логотипе:
-   «вернуться ко всей ленте» это самая частая задача на странице страны. */
-.atlas__home {
+.atlas__ttl {
   flex: 1 1 auto;
+  font: 500 0.6875rem/1 var(--font-data);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--console-ink-2);
+}
+
+/* «Главная лента» стоит НИЖЕ подписи атласа и вплотную к сетке стран: это
+   такой же пункт назначения, как страна, а не заголовок панели. Рядом с
+   крестиком она читалась как «закрыть» — и промахивались. */
+.atlas__home {
   display: block;
-  padding: 0.5rem 0.625rem;
-  margin-inline-start: -0.625rem;
+  margin-bottom: 0.875rem;
+  padding: 0.5625rem 0.6875rem;
   background: var(--console-2);
   border: 1px solid var(--console-rule);
+  border-inline-start: 2px solid var(--beam);
   border-radius: var(--r);
   text-decoration: none;
-  transition: border-color 0.12s;
+  transition: border-color 0.12s, background 0.12s, transform 0.12s;
 }
-.atlas__home:hover { border-color: var(--beam); }
+.atlas__home:hover { background: #131C26; transform: translateX(2px); }
 .atlas__homeword {
   display: block;
   font: 700 1.0625rem/1.1 var(--font-display);
@@ -402,12 +515,13 @@ html.is-atlas .atlas { transform: none; visibility: visible; }
 .atlas__close:hover { color: var(--console-ink); border-color: var(--beam); }
 
 .atlas__note {
-  margin: 0.875rem 0 1.25rem;
+  margin: 0.875rem 0;
   font: 400 0.75rem/1.5 var(--font-data);
   color: var(--console-ink-2);
 }
 
-.atlas__region { margin-bottom: 1.375rem; }
+.atlas__region { margin-bottom: 1.125rem; }
+.atlas__region:last-child { margin-bottom: 0; }
 
 .atlas__name {
   display: flex;
@@ -426,31 +540,107 @@ html.is-atlas .atlas { transform: none; visibility: visible; }
 .atlas__name a:hover, .atlas__name a.is-current { color: var(--beam); }
 .atlas__name b { font-weight: 400; color: var(--console-ink-2); }
 
-.atlas__list { margin: 0; padding: 0; list-style: none; }
-.atlas__cell { margin-top: 2px; }
+/* Страны в две колонки: в одну десять регионов уходили на три экрана, и
+   Океания жила там, куда не докручивают. Колонки, а не грид, потому что
+   регионы разной длины и хвост должен просто перетекать. */
+.atlas__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  columns: 2;
+  column-gap: 0.375rem;
+}
+.atlas__cell { margin-top: 2px; break-inside: avoid; }
 .atlas__cell a {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.25rem 0.4375rem;
+  gap: 0.625rem;
+  padding: 0.1875rem 0.4375rem;
   /* заливка ячейки — важность верхнего сюжета страны: та же шкала, что в
      ленте, поэтому карта охвата читается без легенды */
-  background: color-mix(in oklab, var(--tier) 36%, transparent);
+  background: color-mix(in oklab, var(--ctier) 34%, transparent);
   text-decoration: none;
   font-size: 0.8125rem;
   border-radius: var(--r);
-  transition: background 0.12s, box-shadow 0.12s;
+  transition: background 0.14s, box-shadow 0.14s, transform 0.14s;
 }
 .atlas__cell a:hover {
-  background: color-mix(in oklab, var(--tier) 60%, transparent);
+  background: color-mix(in oklab, var(--ctier) 58%, transparent);
   box-shadow: inset 2px 0 0 var(--beam);
+  transform: translateX(2px);
 }
+.atlas__cname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .atlas__cnum {
   font: 400 0.6875rem var(--font-data);
   font-variant-numeric: tabular-nums;
   color: var(--console-ink-2);
 }
+
+/* ── Атлас на главной ─────────────────────────────────────────────────── */
+/* Та же сетка, но развёрнутая и на светлом поле: первый вопрос к витрине
+   89 стран — «что вообще есть», и тыкать ради него в боковую панель незачем.
+   Панель остаётся для всех остальных страниц. */
+.homeatlas {
+  padding-block: clamp(1.5rem, 3.5vw, 2.75rem) clamp(1rem, 2.5vw, 1.75rem);
+  background: var(--panel);
+  border-bottom: 1px solid var(--rule);
+}
+.homeatlas__top { max-width: var(--measure); margin-bottom: 1.25rem; }
+.homeatlas__title {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  margin: 0;
+  font: 500 0.75rem/1 var(--font-data);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--ink-2);
+}
+.homeatlas__title::before {
+  content: '';
+  width: 1.5rem;
+  height: 2px;
+  background: var(--accent);
+}
+.homeatlas__note {
+  margin: 0.625rem 0 0;
+  max-width: 68ch;
+  font: 400 0.8125rem/1.5 var(--font-data);
+  color: var(--ink-3);
+}
+
+.homeatlas .atlas__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(21rem, 1fr));
+  gap: 1.125rem 1.75rem;
+  align-items: start;
+}
+.homeatlas .atlas__region { margin-bottom: 0; }
+/* На главной страны — плитки по ширине названия, а не строки во всю колонку:
+   строками 89 стран уезжали на три экрана, и лента начиналась там, куда уже
+   не докручивают. В панели строки остаются — там колонка узкая. */
+.homeatlas .atlas__list {
+  columns: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.homeatlas .atlas__cell { margin-top: 0; }
+.homeatlas .atlas__name { color: var(--ink-3); border-bottom-color: var(--rule); }
+.homeatlas .atlas__name a:hover, .homeatlas .atlas__name a.is-current { color: var(--accent); }
+.homeatlas .atlas__name b { color: var(--ink-3); }
+.homeatlas .atlas__cell a {
+  gap: 0.4375rem;
+  background: color-mix(in oklab, var(--fill) 62%, transparent);
+}
+.homeatlas .atlas__cell a:hover {
+  background: color-mix(in oklab, var(--fill) 85%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+/* На заливке ячейки счётчику нужен тон потемнее: --ink-3 на верхней ступени
+   не дотягивает до 4.5:1. */
+.homeatlas .atlas__cnum { color: var(--ink-2); }
 
 /* ── Лид: щит наблюдения ──────────────────────────────────────────────── */
 /* Лид продолжает консоль вниз — верх страницы остаётся одним тёмным телом,
@@ -460,12 +650,11 @@ html.is-atlas .atlas { transform: none; visibility: visible; }
 .lead {
   background:
     radial-gradient(120% 100% at 8% 0%,
-      color-mix(in oklab, var(--tier) 26%, transparent) 0%, transparent 60%),
+      color-mix(in oklab, var(--ctier) 30%, transparent) 0%, transparent 60%),
     repeating-linear-gradient(to right, rgb(255 255 255 / 3.5%) 0 1px, transparent 1px 44px),
     repeating-linear-gradient(to bottom, rgb(255 255 255 / 3.5%) 0 1px, transparent 1px 44px),
     var(--console);
   color: var(--console-ink);
-  border-bottom: 1px solid var(--console-rule);
 }
 
 .lead__grid {
@@ -535,6 +724,14 @@ html.is-atlas .atlas { transform: none; visibility: visible; }
   height: 2px;
   background: var(--beam);
 }
+/* Номер строки, а не украшение: дальше в ленте идут 2, 3, 4 — лид просто её
+   первая строка, только крупная. */
+.lead__eyebrow b {
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--console-ink);
+  letter-spacing: 0.08em;
+}
 
 /* Плакатный вес 900 здесь на месте: заголовок стоит на тёмном щите один и
    держит весь верх страницы. Мера в 24 знака не даёт ему растечься. */
@@ -576,16 +773,32 @@ html.is-atlas .atlas { transform: none; visibility: visible; }
   padding: 0;
   list-style: none;
 }
-.lead__ents li {
+/* Объекты лида — кнопки: имя ищется по всей неделе, а не украшает подпись. */
+.lead__ents button {
   padding: 0.25rem 0.5625rem;
   font: 400 0.75rem var(--font-data);
   color: var(--console-ink-2);
+  background: transparent;
   border: 1px solid var(--console-rule);
   border-radius: var(--r);
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.lead__ents button:hover {
+  color: #0A1017;
+  background: var(--beam);
+  border-color: var(--beam);
 }
 
 /* ── Заголовок ленты, ось, даты, фильтр ───────────────────────────────── */
 .board { padding-block: clamp(1.75rem, 4vw, 3rem); }
+
+/* Лента на главной идёт сразу за лидом, без собственного отступа сверху: их
+   разделяет тот же волосок, что и любые две соседние строки ленты. Раньше
+   между ними стояли ось, даты и фильтр — двести пикселей приборов, из-за
+   которых лента будто начиналась со второго номера. Пульт уехал НАД лидом. */
+.board--feed { padding-block: 0 clamp(2rem, 5vw, 3.5rem); }
+.board--feed .feed { border-top: 1px solid var(--rule); }
 
 .board__head {
   max-width: var(--measure);
@@ -762,27 +975,6 @@ html.is-atlas .atlas { transform: none; visibility: visible; }
   flex-wrap: wrap;
 }
 
-.views {
-  display: flex;
-  flex: none;
-  border: 1px solid var(--rule-strong);
-  border-radius: var(--r);
-  overflow: hidden;
-}
-.views__btn {
-  padding: 0.5rem 0.8125rem;
-  border: 0;
-  background: var(--panel);
-  color: var(--ink-3);
-  font: 400 0.75rem/1 var(--font-data);
-  white-space: nowrap;
-  cursor: pointer;
-  transition: color 0.12s, background 0.12s;
-}
-.views__btn + .views__btn { border-inline-start: 1px solid var(--rule-strong); }
-.views__btn:hover { color: var(--ink); }
-.views__btn.is-on { background: var(--ink); color: var(--panel); }
-
 .filter__label { position: absolute; left: -9999px; }
 .filter__input {
   flex: 1 1 12rem;
@@ -802,6 +994,29 @@ html.is-atlas .atlas { transform: none; visibility: visible; }
   font: 400 0.75rem var(--font-data);
   font-variant-numeric: tabular-nums;
   color: var(--ink-3);
+}
+
+/* Выход из «сужаю видимое» в «ищу по всему»: фильтр режет ту ленту, что уже на
+   странице, и когда в ней ничего не находится, следующий шаг должен стоять
+   рядом, а не в шапке. */
+.filter__wide {
+  flex: none;
+  margin-inline-start: auto;
+  padding: 0.5rem 0.75rem;
+  background: transparent;
+  color: var(--ink-3);
+  border: 1px dashed var(--rule-strong);
+  border-radius: var(--r);
+  font: 400 0.75rem/1 var(--font-data);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.filter__wide:hover {
+  color: var(--ink);
+  border-style: solid;
+  border-color: var(--accent);
+  background: var(--panel);
 }
 
 /* ── Лента: строка и есть столбик ─────────────────────────────────────── */
@@ -833,8 +1048,14 @@ html.is-atlas .atlas { transform: none; visibility: visible; }
    Теперь элемент во всю строку, а важность задаёт не край, а точки затухания:
    плотное до 0.45w, дальше долгий спад в ноль к самой отметке. Координата
    сохранена — краска кончается там же, где кончалась полоса, — но кончается
-   она сходом на нет, а не срезом. Граница важности стала менее очевидной;
-   это ровно тот размен, ради которого всё и переделано. */
+   она сходом на нет, а не срезом.
+
+   Красит --fill, а не --tier. --tier идёт навстречу теме (на светлой верх
+   шкалы почти чёрно-синий), и заголовок важного сюжета на своей же заливке
+   тонул — тем сильнее, чем сюжет важнее. --fill всегда уходит ОТ цвета чернил,
+   поэтому контраст держится около 10:1 на любой ступени и в любой теме, а
+   левый край строки остаётся насыщенным --tier: величина по-прежнему читается
+   цветом, просто теперь линией, а не подложкой под текстом. */
 .story:has(.story__sig)::before {
   content: '';
   position: absolute;
@@ -842,16 +1063,21 @@ html.is-atlas .atlas { transform: none; visibility: visible; }
   z-index: -1;
   border-inline-start: 2px solid var(--tier);
   background: linear-gradient(to right,
-    color-mix(in oklab, var(--tier) 32%, transparent) 0,
-    color-mix(in oklab, var(--tier) 27%, transparent) calc(var(--w) * 0.45%),
-    color-mix(in oklab, var(--tier) 5%, transparent) calc(var(--w) * 0.9%),
+    color-mix(in oklab, var(--fill) 62%, transparent) 0,
+    color-mix(in oklab, var(--fill) 52%, transparent) calc(var(--w) * 0.45%),
+    color-mix(in oklab, var(--fill) 9%, transparent) calc(var(--w) * 0.9%),
     transparent calc(var(--w) * 1.06%));
   transform-origin: left;
   transition: filter 0.18s ease;
   animation: draw 0.55s cubic-bezier(0.16, 0.84, 0.28, 1) both;
   animation-delay: calc(var(--i, 0) * 20ms);
 }
-.story:has(.story__sig):hover::before { filter: saturate(1.3) brightness(0.97); }
+.story:has(.story__sig):hover::before { filter: saturate(1.25) contrast(1.06); }
+/* Подаётся заголовок, а не вся строка: transform на .story занят проявлением
+   при прокрутке (см. блок «Движение» внизу), и два владельца одного свойства
+   гасили бы друг друга. */
+.story__title { transition: transform 0.16s cubic-bezier(0.16, 0.84, 0.28, 1); }
+.story:hover .story__title { transform: translateX(3px); }
 
 /* Слева — порядковый номер, и только он: «96» на этом месте читалось как
    номер строки. Важность подписана словом ниже, в выходных данных. */
@@ -974,14 +1200,15 @@ html.is-atlas .atlas { transform: none; visibility: visible; }
   padding: 0.375rem 0.625rem;
   font-size: 0.8125rem;
   text-decoration: none;
-  background: color-mix(in oklab, var(--tier) 28%, var(--panel));
+  background: color-mix(in oklab, var(--fill) 62%, var(--panel));
   border: 1px solid var(--rule);
   border-radius: var(--r);
-  transition: border-color 0.12s, background 0.12s;
+  transition: border-color 0.12s, background 0.12s, transform 0.12s;
 }
 .chips__item a:hover {
-  background: color-mix(in oklab, var(--tier) 48%, var(--panel));
+  background: color-mix(in oklab, var(--fill) 88%, var(--panel));
   border-color: var(--rule-strong);
+  transform: translateY(-1px);
 }
 .chips__item b {
   font: 400 0.6875rem var(--font-data);
@@ -1139,20 +1366,285 @@ body[data-region='southern_africa'] {
   padding: 0;
   list-style: none;
 }
+/* Имя — кнопка: нажатие открывает поиск по всему корпусу, уже суженный до
+   этой страны. Раньше это была просто плашка со счётчиком — читатель видел,
+   кто в новостях, и не мог никуда с этим пойти. */
 .who__item {
   display: inline-flex;
   align-items: baseline;
   gap: 0.4375rem;
   padding: 0.3125rem 0.625rem;
   background: var(--panel-sunk);
+  border: 1px solid transparent;
   border-radius: var(--r);
-  font-size: 0.8125rem;
+  font: 400 0.8125rem var(--font-text);
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, transform 0.12s;
+}
+.who__item:hover {
+  background: var(--panel);
+  border-color: var(--accent);
+  transform: translateY(-1px);
 }
 .who__n {
   font: 400 0.6875rem var(--font-data);
   font-variant-numeric: tabular-nums;
   color: var(--ink-3);
 }
+
+/* ── Поиск по всему корпусу ───────────────────────────────────────────── */
+/* На странице лежит только её лента — сто строк из двух с половиной тысяч.
+   Слой, а не страница: искать хочется, не теряя того, что уже читаешь.
+   Группировка живёт полосками под строкой и считается по тому, что уже
+   нашлось, — отдельного экрана «расширенный поиск» тут нет. */
+.find {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgb(5 9 14 / 62%);
+  backdrop-filter: blur(3px);
+  animation: fade 0.2s ease both;
+  overscroll-behavior: contain;
+}
+
+.find__panel {
+  display: flex;
+  flex-direction: column;
+  max-height: min(88dvh, 56rem);
+  background: var(--surface);
+  border-bottom: 1px solid var(--rule-strong);
+  box-shadow: 0 1.5rem 3rem rgb(0 0 0 / 35%);
+  animation: drop 0.28s cubic-bezier(0.16, 0.84, 0.28, 1) both;
+}
+
+.find__top {
+  flex: none;
+  background: var(--console);
+  color: var(--console-ink);
+}
+.find__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 3.75rem;
+}
+.find__label { position: absolute; left: -9999px; }
+
+.find__ico {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--beam);
+  border-radius: 50%;
+  position: relative;
+}
+.find__ico::after {
+  content: '';
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 7px;
+  height: 2px;
+  background: var(--beam);
+  transform: rotate(45deg);
+}
+
+.find__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.5rem 0;
+  background: transparent;
+  border: 0;
+  color: var(--console-ink);
+  font: 400 clamp(1rem, 2.4vw, 1.25rem)/1.3 var(--font-text);
+}
+.find__input::placeholder { color: var(--console-ink-2); }
+.find__input:focus { outline: none; }
+
+.find__close {
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  background: var(--console-2);
+  color: var(--console-ink-2);
+  border: 1px solid var(--console-rule);
+  border-radius: var(--r);
+  font: 400 1.125rem/1 var(--font-text);
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.find__close:hover { color: var(--console-ink); border-color: var(--beam); }
+
+.find__body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-block: 1rem 2rem;
+  scrollbar-width: thin;
+}
+
+/* Активные сужения — первой строкой и снимаются по одному: иначе после трёх
+   нажатий непонятно, почему нашлось четыре сюжета. */
+.find__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  margin-bottom: 0.875rem;
+}
+.find__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4375rem;
+  padding: 0.3125rem 0.5rem 0.3125rem 0.625rem;
+  background: var(--ink);
+  color: var(--panel);
+  border: 0;
+  border-radius: var(--r);
+  font: 400 0.8125rem/1 var(--font-data);
+  cursor: pointer;
+}
+.find__tag i { font-style: normal; opacity: 0.6; }
+.find__tag:hover { background: var(--accent); }
+.find__tag:hover i { opacity: 1; }
+
+/* Затравки: пока не набрано ни слова, показываем не «начните вводить», а тех,
+   кто в новостях чаще всех. Имена берутся из словаря (glossary.py) — иначе в
+   топ GKG лезут «information technology» и «terms of service». */
+.find__seeds {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  margin-bottom: 1rem;
+}
+.find__seedcap {
+  width: 100%;
+  margin-bottom: 0.125rem;
+  font: 400 0.6875rem/1 var(--font-data);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink-3);
+}
+.find__seed {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4375rem;
+  padding: 0.375rem 0.625rem;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  font: 400 0.875rem var(--font-text);
+  cursor: pointer;
+  transition: border-color 0.12s, transform 0.12s;
+}
+.find__seed b {
+  font: 400 0.6875rem var(--font-data);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+}
+.find__seed:hover { border-color: var(--accent); transform: translateY(-1px); }
+
+/* Фасеты. Показываются только те, по которым выборку и правда есть чем
+   сузить: полоска с одним значением ничего не сужает и не рисуется. */
+.find__groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  padding: 0.875rem 1rem;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+}
+.find__group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3125rem;
+}
+.find__gcap {
+  flex: none;
+  width: 4.5rem;
+  font: 400 0.6875rem/1.6 var(--font-data);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-3);
+}
+.find__gbtn {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  padding: 0.1875rem 0.5rem;
+  background: transparent;
+  color: var(--ink-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  font: 400 0.8125rem var(--font-text);
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.find__gbtn b {
+  font: 400 0.6875rem var(--font-data);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+}
+.find__gbtn:hover { color: var(--ink); background: var(--surface); border-color: var(--accent); }
+
+.find__stat {
+  margin: 0 0 0.75rem;
+  font: 400 0.8125rem/1.5 var(--font-data);
+  color: var(--ink-3);
+}
+
+/* Строки результата — та же грамматика, что в ленте: фон и есть важность. */
+.find__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-width: var(--measure);
+  isolation: isolate;
+}
+.find__row {
+  position: relative;
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid var(--rule);
+}
+.find__row::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-inline-start: 2px solid var(--tier);
+  background: linear-gradient(to right,
+    color-mix(in oklab, var(--fill) 55%, transparent) 0,
+    color-mix(in oklab, var(--fill) 8%, transparent) calc(var(--w) * 0.9%),
+    transparent calc(var(--w) * 1.06%));
+}
+.find__link {
+  font: 700 0.9375rem/1.3 var(--font-display);
+  letter-spacing: -0.015em;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.find__link:hover { box-shadow: inset 0 -1px 0 var(--ink); }
+.find__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.1875rem 0.75rem;
+  margin: 0.25rem 0 0;
+  font: 400 0.75rem/1.4 var(--font-data);
+  color: var(--ink-3);
+}
+.find__score {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+
+@keyframes fade { from { opacity: 0; } }
+@keyframes drop { from { opacity: 0; transform: translateY(-0.75rem); } }
 
 /* ── Подвал: нижняя стенка консоли ────────────────────────────────────── */
 .foot {
@@ -1181,17 +1673,80 @@ body[data-region='southern_africa'] {
 }
 .foot__tele b { color: var(--console-ink); font-weight: 500; }
 
+/* ── Движение ─────────────────────────────────────────────────────────── */
+/* Всё, что двигается от прокрутки, — на CSS-таймлайнах, без единого слушателя
+   scroll: браузер считает это вне основного потока и не роняет частоту кадров
+   на ленте в сто строк. Где таймлайнов нет (Firefox, Safari до 26), просто
+   ничего не двигается — содержимое на месте и полностью видно.
+
+   Строгий порядок: сначала @supports, внутри — проверка на «человек не просил
+   тишины». prefers-reduced-motion ниже гасит длительности, но таймлайну
+   длительность не нужна, поэтому его приходится отсекать здесь. */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    /* Строка ленты проявляется, входя в кадр. Диапазон короткий: строка должна
+       быть готова к чтению задолго до того, как встанет посреди экрана. */
+    .story, .chips__item, .homeatlas .atlas__region {
+      animation: rise linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 34%;
+    }
+
+    /* Орнамент региона идёт медленнее страницы — отсюда и глубина: слой за
+       текстом и слой текста расходятся по скорости. Ровно то же делает
+       фотоподложка, только без мегабайта фотографии на каждую из 89 стран. */
+    body[data-region]::before,
+    body[data-region]::after {
+      animation: drift linear both;
+      animation-timeline: scroll(root);
+    }
+  }
+}
+
+@keyframes rise { from { opacity: 0; transform: translateY(1.5rem); } }
+@keyframes drift { to { transform: translateY(-14vh); } }
+
+/* ── Фон страны и региона ─────────────────────────────────────────────── */
+/* Орнамент за шапкой был только за шапкой — прокрутил на экран вниз, и страна
+   становилась неотличима от любой другой. Теперь та же геометрия лежит за всей
+   страницей, закреплена к окну и сдвигается медленнее содержимого. Плюс мягкое
+   пятно тона сверху: два слоя на разной скорости и дают ощущение подложки. */
+body[data-region]::before,
+body[data-region]::after {
+  content: '';
+  position: fixed;
+  inset: -16vh 0;
+  z-index: -2;
+  pointer-events: none;
+}
+body[data-region]::before {
+  background-image: var(--pat);
+  background-size: var(--pat-size, auto);
+  opacity: 0.4;
+  mask-image: linear-gradient(to bottom, #000 0 55%, transparent 92%);
+}
+body[data-region]::after {
+  z-index: -3;
+  background: radial-gradient(70% 45% at 78% 6%,
+    color-mix(in oklab, var(--sig-2) 14%, transparent) 0, transparent 70%);
+  animation-direction: reverse;
+}
+
 /* ── Ограничения движения ─────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
+  @view-transition { navigation: none; }
 }
 
 @media print {
-  .top, .foot, .filter, .days, .theme, .atlas, .atlas__scrim { display: none; }
+  .top, .foot, .filter, .days, .theme, .atlas, .atlas__scrim, .find,
+  .homeatlas { display: none; }
   body { background: #fff; color: #000; margin: 0; }
+  body[data-region]::before, body[data-region]::after { display: none; }
   .lead { background: none; color: #000; }
 }

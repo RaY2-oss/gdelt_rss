@@ -32,6 +32,7 @@ import db
 import settings
 import translate
 import entity_ru
+import glossary
 import importance as imp
 import feeds
 from feeds import _pubdate
@@ -61,6 +62,7 @@ HOME_LIMIT = 100       # сюжетов в ленте главной
 REGION_LIMIT = 120     # сюжетов на странице региона
 COUNTRY_LIMIT = 150    # сюжетов на странице страны
 ENTITY_TOP = 14        # субъектов в блоке «кто в новостях»
+POPULAR_TOP = 12       # имён-подсказок под строкой поиска
 
 # ── Гео-структура ───────────────────────────────────────────────────────────
 # Порядок регионов = порядок в settings.COUNTRIES (там они размечены
@@ -370,6 +372,74 @@ def top_entities(items, limit=ENTITY_TOP):
     return [(name, n) for name, n in counter.most_common(limit) if name and n > 1]
 
 
+def popular_names(items, limit=POPULAR_TOP):
+    """Подсказки под строкой поиска: самые частые субъекты недели, у которых
+    есть словарная форма.
+
+    Фильтр по glossary.py тут не украшение, а единственный способ отделить имя
+    от мусора: в сыром счёте GKG вперемешку с Нарендрой Моди идут «terms of
+    service», «information technology» и «young». В словаре лежат только те,
+    кого кто-то руками счёл достойным упоминания, — и заодно с правильным
+    русским написанием (сам GKG отдаёт латиницу в нижнем регистре, а перевод
+    «cockroach janta party» словарь чинит обратно в «Бхаратия джаната парти»).
+    """
+    counter = Counter()
+    for s in items:
+        for e in s["entities"]:
+            counter[e.strip()] += 1
+    out = []
+    for name, n in counter.most_common():
+        if n < 3 or len(out) >= limit:
+            break
+        ru = glossary.lookup(name)
+        if ru:
+            out.append([ru, name, n])
+    return out
+
+
+def search_index(everything, regions):
+    """Индекс для поиска по всему корпусу — то, чего на странице нет.
+
+    Каждая страница носит с собой только свою ленту, а искать читатель хочет
+    по всей неделе сразу. Отдельный JSON грузится лениво, по первому касанию
+    строки поиска, и потому не стоит ничего тем, кто просто читает.
+
+    Формат — массивы, а не объекты с именами полей: имена полей на 2300
+    записей весят больше самих данных. Страны и дни вынесены в словари и
+    заменены индексами по той же причине.
+    """
+    days_list = sorted({s["day"] for s in everything}, reverse=True)
+    di = {d: i for i, d in enumerate(days_list)}
+    keys = sorted({s["country"] for s in everything})
+    ci = {c: i for i, c in enumerate(keys)}
+    # Русские написания только для тех имён, что есть в словаре: GKG отдаёт
+    # латиницу в нижнем регистре, и «narendra modi» в списке фасетов рядом с
+    # русскими заголовками выглядит как чужая строка. Остальные фасеты браузер
+    # ставит с заглавных — этого хватает, а гнать 40 тысяч имён в JSON ради
+    # красоты не стоит.
+    names = {}
+    for s in everything:
+        for e in s["entities"]:
+            e = e.strip()
+            if e and e not in names:
+                ru = glossary.lookup(e)
+                if ru:
+                    names[e] = ru
+    return {
+        "d": days_list,
+        "n": names,
+        "c": [[c, RU_COUNTRY.get(c, settings.country_display(c))] for c in keys],
+        # регионы нужны, чтобы «объекты этой страницы» на странице региона
+        # означали все его страны, а не одну
+        "g": [[r["slug"], r["name"],
+               [ci[c["key"]] for c in r["countries"] if c["key"] in ci]]
+              for r in regions],
+        "s": [[s["title"], ci[s["country"]], di[s["day"]], s["score"],
+               s["url"], s["domain"], ";".join(s["entities"])]
+              for s in everything],
+    }
+
+
 DOW = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
 
 
@@ -511,18 +581,21 @@ def build(out_dir=OUT_DIR):
         # полоса дат общая для всех страниц: колонки задаёт весь корпус, а
         # высоты столбиков app.js считает по ленте конкретной страницы
         "asset_v": _asset_v(), "days": days(now, {s["day"] for s in everything}),
-        "nav": json.dumps(
-            [{"n": RU_COUNTRY.get(c, settings.country_display(c)),
-              "u": f"/c/{c}.html", "r": name}
-             for _s, name, cs in REGIONS for c in cs if c in by_country],
-            ensure_ascii=False),
+        "popular": popular_names(everything),
     }
 
     os.makedirs(out_dir, exist_ok=True)
+    # Индекс поиска: весь корпус недели, а не то, что попало на страницу.
+    _write(os.path.join(out_dir, "search.json"),
+           json.dumps(search_index(everything, regions),
+                      ensure_ascii=False, separators=(",", ":")))
+
     lead = everything[0] if everything else None
     _write(os.path.join(out_dir, "index.html"),
            env.get_template("index.html").render(
-               lead=lead, lead_ents=[ru_name(e) for e in lead["entities"]] if lead else [],
+               lead=lead,
+               lead_ents=[{"name": ru_name(e), "key": e.strip()}
+                          for e in lead["entities"]] if lead else [],
                items=everything[1:HOME_LIMIT], total=len(everything), **ctx))
 
     for region in regions:
@@ -538,7 +611,10 @@ def build(out_dir=OUT_DIR):
                    region=next((n for _s, n, cs in REGIONS if country in cs), ""),
                    region_slug=next((s for s, _n, cs in REGIONS if country in cs), ""),
                    total=len(items), items=items[:COUNTRY_LIMIT],
-                   entities=[{"name": ru_name(n), "n": k} for n, k in tops[country]],
+                   # key — сырой ключ GKG: по нему ищет фасет «объект», имя в
+                   # него не годится (в индексе субъекты лежат латиницей)
+                   entities=[{"name": ru_name(n), "key": n, "n": k}
+                             for n, k in tops[country]],
                    **ctx))
 
     static_out = os.path.join(out_dir, "static")

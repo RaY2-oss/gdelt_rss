@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "_story.html" import feed, legend, filter, dates %}
 {% set current_region = region_slug %}
+{% set current_country = country %}
 
 {% block title %}{{ country_ru }} — {{ site_title }}{% endblock %}
 {% block description %}Наука и технологии: {{ country_ru }}. {{ total }} {{ total|plural('сюжет','сюжета','сюжетов') }} за неделю, по убыванию важности.{% endblock %}
@@ -28,10 +29,17 @@
   {% if entities %}
   <section class="who">
     <h2 class="who__title">Кто в новостях</h2>
-    <p class="who__note">Число — сколько раз имя встретилось за неделю.</p>
+    <p class="who__note">
+      Число — сколько раз имя встретилось за неделю. Нажмите, чтобы найти все
+      сюжеты с ним; поиск откроется уже суженным до страны.
+    </p>
     <ul class="who__list">
       {% for e in entities %}
-      <li class="who__item"><span class="who__name">{{ e.name }}</span><span class="who__n">{{ e.n }}</span></li>
+      <li>
+        <button class="who__item" type="button" data-seed="{{ e.key }}" data-seed-scope>
+          <span class="who__name">{{ e.name }}</span><span class="who__n">{{ e.n }}</span>
+        </button>
+      </li>
       {% endfor %}
     </ul>
   </section>

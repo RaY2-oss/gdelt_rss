@@ -131,6 +131,13 @@ def find_all(text):
     return out
 
 
+def lookup(phrase):
+    """Словарная форма фразы целиком или None. Нужна тем, кто уже знает имя и
+    хочет его каноническое написание, — в отличие от find_all, который ищет
+    имена внутри текста."""
+    return (_load().get(_norm(phrase)) or (None,))[0]
+
+
 def extract_entities(text, limit=40):
     """Сущности, найденные в тексте. Годится и для колонки entities: в digest
     она пустая, GDELT их туда не доносит."""

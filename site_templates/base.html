@@ -12,18 +12,14 @@
 <link rel="icon" href="/static/mark.svg" type="image/svg+xml">
 {% block head %}{% endblock %}
 <script>
-  // До первой отрисовки, иначе тёмная тема моргнёт белым, а открытый атлас
-  // въедет заново на каждой странице.
+  // До первой отрисовки, иначе тёмная тема моргнёт белым.
   try {
     var t = localStorage.getItem('theme');
     if (t) document.documentElement.dataset.theme = t;
-    if (localStorage.getItem('atlas') === '1' &&
-        matchMedia('(min-width: 64rem)').matches)
-      document.documentElement.className += ' is-atlas';
   } catch (e) {}
 </script>
 </head>
-<body{% if current_region %} data-region="{{ current_region }}"{% endif %}>
+<body{% if current_region %} data-region="{{ current_region }}"{% endif %}{% if current_country %} data-country="{{ current_country }}"{% endif %}>
 <a class="skip" href="#main">К содержимому</a>
 
 {# Шапка в одну строку. Раньше их было три: знак с поиском, полоса регионов и
@@ -50,12 +46,13 @@
       <b>{{ status.last_tick }}</b>
     </span>
 
-    <form class="jump" role="search" onsubmit="return false">
-      <label class="jump__label" for="jump">Страна</label>
-      <input class="jump__input" id="jump" list="countries" type="search"
-             placeholder="Перейти к стране" autocomplete="off" enterkeyhint="go">
-      <datalist id="countries"></datalist>
-    </form>
+    {# Не поле, а кнопка: искать всё равно негде — корпус недели лежит
+       отдельным файлом и подгружается по первому нажатию. #}
+    <button class="jump" type="button" aria-controls="find" aria-expanded="false">
+      <span class="jump__ico" aria-hidden="true"></span>
+      <span class="jump__word">Поиск по всем новостям</span>
+      <kbd class="jump__kbd" aria-hidden="true">/</kbd>
+    </button>
 
     <button class="theme" type="button" aria-label="Переключить тему" title="Светлая / тёмная тема">
       <span class="theme__dot" aria-hidden="true"></span>
@@ -82,16 +79,14 @@
   </div>
 </footer>
 
-{# Атлас. Открывается с любой страницы и сдвигает её вбок, а не накрывает:
-   так видно, откуда ушёл и куда возвращаешься. На узком экране сдвигать
-   некуда — там он ложится поверх. #}
+{# Атлас. Ложится поверх страницы и ничего не двигает: сдвиг на широком экране
+   уводил из-под курсора ровно ту строку, ради которой атлас и открывали.
+   «Главная лента» стоит внизу, вплотную к сетке стран, — это такой же пункт
+   назначения, как страна, а не заголовок панели. #}
 <aside class="atlas" id="atlas" aria-label="Атлас" aria-hidden="true">
   <div class="atlas__inner">
     <div class="atlas__head">
-      <a class="atlas__home" href="/">
-        <span class="atlas__homeword">Главная лента</span>
-        <span class="atlas__homenote">всё вместе, по важности</span>
-      </a>
+      <span class="atlas__ttl">Атлас охвата</span>
       <button class="atlas__close" type="button" aria-label="Закрыть атлас">×</button>
     </div>
 
@@ -103,31 +98,52 @@
       {{ status.days }} {{ status.days|plural('день','дня','дней') }}.
     </p>
 
-    <div class="atlas__grid">
-      {% for r in regions %}
-      <section class="atlas__region">
-        <h2 class="atlas__name">
-          <a href="/r/{{ r.slug }}.html"{% if r.slug == current_region %} class="is-current"{% endif %}>{{ r.name }}</a>
-          <b>{{ r.n }}</b>
-        </h2>
-        <ul class="atlas__list">
-          {% for c in r.countries %}
-          <li class="atlas__cell" data-tier="{{ c.top|tier }}">
-            <a href="/c/{{ c.key }}.html">
-              <span class="atlas__cname">{{ c.name }}</span>
-              <span class="atlas__cnum">{{ c.n }}</span>
-            </a>
-          </li>
-          {% endfor %}
-        </ul>
-      </section>
-      {% endfor %}
-    </div>
+    <a class="atlas__home" href="/">
+      <span class="atlas__homeword">Главная лента</span>
+      <span class="atlas__homenote">всё вместе, по важности</span>
+    </a>
+
+    {% from "_atlas.html" import atlas_grid %}
+    {{ atlas_grid(regions, current_region) }}
   </div>
 </aside>
 <div class="atlas__scrim" hidden></div>
 
-<script>window.__NAV__ = {{ nav|safe }};</script>
+{# Поиск по всему корпусу недели. Лежит отдельным слоем, а не страницей: искать
+   хочется, не теряя того, что уже читаешь. Группировка (страна, объект, дата)
+   появляется сама по мере набора и живёт полосками фильтров — отдельного
+   экрана «расширенный поиск» тут нет и не нужно. #}
+<div class="find" id="find" hidden>
+  <div class="find__panel">
+    <div class="find__top">
+      <div class="find__bar wrap">
+        <span class="find__ico" aria-hidden="true"></span>
+        <label class="find__label" for="find-q">Поиск по новостям</label>
+        <input class="find__input" id="find-q" type="search" autocomplete="off"
+               enterkeyhint="search" placeholder="Слово, имя, издание — по всей неделе">
+        <button class="find__close" type="button" aria-label="Закрыть поиск">×</button>
+      </div>
+    </div>
+
+    <div class="find__body wrap">
+      <div class="find__tags" data-find-tags hidden></div>
+
+      {% if popular %}
+      <div class="find__seeds" data-find-seeds>
+        <span class="find__seedcap">Чаще всего в новостях</span>
+        {% for ru, key, n in popular %}
+        <button class="find__seed" type="button" data-seed="{{ key }}">{{ ru }}<b>{{ n }}</b></button>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <div class="find__groups" data-find-groups hidden></div>
+      <p class="find__stat" data-find-stat></p>
+      <ol class="find__list" data-find-list></ol>
+    </div>
+  </div>
+</div>
+
 <script src="/static/app.js?v={{ asset_v }}" defer></script>
 </body>
 </html>

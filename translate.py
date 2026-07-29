@@ -7,6 +7,12 @@ Google Translate (deep-translator: просто HTTP GET к translate.google.com
 Статьи на русском и английском не переводятся (уже читаемы). Переводятся
 только статьи, уже отобранные в фид (top-N после дедупа в feeds.build_country)
 — не весь оценённый бэклог.
+
+Только на английский. Русское плечо целиком за translate_ru (локальная модель
+opus-mt-tc-big-en-zle): Google в эту сторону переводит бодро, но плоско —
+«38 убитых в столкновениях с автобусами» там, где было «38 погибших в
+столкновении автобусов», — и мимо словаря имён (glossary.py), который к
+модели подключён с двух сторон.
 """
 import logging
 import re
@@ -91,18 +97,6 @@ def _translate(text, source="auto", target="en"):
                 continue
             log.debug("Google Translate fail (%s): %s", source, exc)
             return None
-
-
-def to_ru(title, text):
-    """Второе плечо: английский → русский, тем же Google.
-
-    Локальные модели идут int8 на процессоре без AVX и на именах собственных
-    выдумывают («Jantar Mantar» → «Партия тараканов Джанта»), а суточную
-    очередь в тысячи статей не разбирают в принципе: тридцать штук за прогон.
-    Google на том же тексте и точнее, и в полсотни раз быстрее. Модели
-    остаются запасным маршрутом — на случай, когда Google не ответил.
-    """
-    return _translate(title, "en", "ru"), _translate(text, "en", "ru")
 
 
 def translate_missing(conn, rows):
