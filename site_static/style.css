@@ -83,6 +83,27 @@
   --beam: #E9EFF5;
   --accent: #0E120F;    --accent: light-dark(#0E120F, #E9EDF2);
 
+  /* Свечение прибора. На тёмной теме консоль не просто тёмная плашка, а
+     подсвеченная изнутри панель — сигнальный тон разлит под шапкой и над
+     подвалом. На бумаге свечения не бывает, поэтому на светлой теме токен
+     пуст и все правила с ним гаснут сами, без второй ветки. */
+  --glow: transparent;  --glow: light-dark(transparent, #2E6FB8);
+
+  /* Пружины. Одна библиотека кривых на весь сайт вместо безье, подобранного
+     на глаз в каждом правиле: linear() снят с затухающего осциллятора
+     (ζ — затухание, ω₀ — частота), поэтому наведение и раскрытие отвечают
+     как вещь с массой, а не как график. Три штуки и хватит.
+       --spring ζ0.72 ω14 — 0.65с, лёгкий перелёт: раскрытия, панели
+       --snap   ζ0.62 ω22 — 0.5с, короткий отклик: наведение, фокус
+       --pop    ζ0.42 ω18 — 0.85с, заметный выброс: только раз за визит */
+  --spring: linear(0, 0.070, 0.227, 0.411, 0.588, 0.738, 0.854, 0.936, 0.990,
+    1.020, 1.035, 1.038, 1.035, 1.029, 1.022, 1.015, 1.010, 1.005, 1.002, 1);
+  --snap: linear(0, 0.101, 0.319, 0.561, 0.771, 0.926, 1.023, 1.071, 1.084,
+    1.075, 1.057, 1.037, 1.019, 1.006, 0.998, 0.994, 0.993, 0.994, 0.997, 1);
+  --pop: linear(0, 0.193, 0.585, 0.949, 1.170, 1.234, 1.187, 1.095, 1.010,
+    0.959, 0.945, 0.957, 0.978, 0.998, 1.010, 1.013, 1.010, 1.005, 1.000, 1);
+  /* Безье, что раньше повторялся дюжину раз строкой: вход с торможением. */
+  --ease: cubic-bezier(0.16, 0.84, 0.28, 1);
 
   --font-display: 'Golos Text', system-ui, sans-serif;
   --font-text: 'IBM Plex Sans', 'Noto Sans', system-ui, sans-serif;
@@ -1945,8 +1966,322 @@ body[data-region]::after, body[data-home]::after {
   animation-direction: reverse;
 }
 
+/* ══ Пеленг II ═══════════════════════════════════════════════════════════
+   Прибор включили. Первая редакция была чертежом прибора — точной, но
+   выключенной: плоские заливки, ровный свет, страницы сменялись подменой
+   кадра. Здесь появляется то, чего у чертежа нет и быть не может: свет
+   (консоль светится изнутри), фактура (зерно поверх всего), развёртка
+   (луч обходит карту) и непрерывность (страна не исчезает при переходе на
+   свою страницу, а долетает до заголовка).
+
+   Правило слоя: ни одна вещь ниже не несёт смысла в одиночку. Выключите её —
+   и не пропадёт ни одна величина, ни одна ссылка, ни один заголовок. Всё это
+   слой обратной связи, а не слой содержания. Поэтому весь блок целиком гаснет
+   под prefers-reduced-motion и в печати. */
+
+/* ── Зерно ────────────────────────────────────────────────────────────── */
+/* Одна плитка турбулентности поверх всей витрины. Плоские заливки на большом
+   поле выдают экран — глаз читает идеально ровный тон как «неготовое».
+   Три процента шума хватает, чтобы бумага стала бумагой, а тёмная тема
+   перестала выглядеть чёрной дырой в градиентных переходах шкалы.
+
+   feTurbulence, а не PNG: 400 байт в таблице стилей против запроса и
+   килобайтов картинки. baseFrequency 0.9 даёт мелкое, почти типографское
+   зерно; крупнее — и это уже помехи, а не фактура. */
+html::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.035;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+/* overlay по тёмному полю почти не виден: чёрное умножается, а не осветляется.
+   На тёмной теме зерно работает в soft-light и чуть плотнее. Порядок веток
+   тот же, что у токенов: сначала системная гамма, потом ручной выбор — он
+   обязан её перебивать. */
+@media (prefers-color-scheme: dark) {
+  html::after { opacity: 0.06; mix-blend-mode: soft-light; }
+}
+:root[data-theme='light']::after { opacity: 0.035; mix-blend-mode: overlay; }
+:root[data-theme='dark']::after { opacity: 0.06; mix-blend-mode: soft-light; }
+
+/* ── Свет консоли ─────────────────────────────────────────────────────── */
+/* Шапка перестаёт быть плашкой: под её нижней кромкой разлит сигнальный тон,
+   как подсветка шкалы под стеклом. Только на тёмной теме — --glow там цвет, а
+   на светлой прозрачный, и правило гаснет само.
+
+   Слой лежит НАД фоном шапки, но под её содержимым (z-index: 0 при
+   position: relative у детей — их поднимает сам поток), и не перехватывает
+   указатель. */
+.top::before, .foot::before {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  height: 9rem;
+  pointer-events: none;
+  background: radial-gradient(120% 100% at 50% 100%,
+    color-mix(in oklab, var(--glow) 26%, transparent) 0, transparent 72%);
+}
+.top::before { bottom: 0; }
+.foot::before { top: 0; transform: scaleY(-1); }
+.top, .foot { position: relative; }
+.top__bar, .foot__row { position: relative; z-index: 1; }
+
+/* ── Пеленг: линия прокрутки в шапке ──────────────────────────────────── */
+/* Тонкая линия по нижней кромке шапки идёт слева направо ровно на глубину
+   прокрутки. Это единственный на витрине указатель «сколько ещё» — полосы
+   прокрутки на длинной ленте не хватает, а цифры тут были бы шумом.
+
+   Красится всей шкалой сразу: линия проходит через ступени 0→4, и к концу
+   ленты доводит до верхнего сигнала. Без единого слушателя scroll —
+   animation-timeline: scroll(root) считает это в компоновщике. */
+.top::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  height: 2px;
+  width: 100%;
+  transform-origin: left;
+  transform: scaleX(0);
+  pointer-events: none;
+  background: linear-gradient(to right,
+    var(--csig-1), var(--csig-2) 55%, var(--csig-4));
+}
+@supports (animation-timeline: scroll(root)) {
+  @media (prefers-reduced-motion: no-preference) {
+    .top::after {
+      animation: bearing linear both;
+      animation-timeline: scroll(root);
+    }
+  }
+}
+@keyframes bearing { to { transform: scaleX(1); } }
+
+/* ── Переход между страницами ─────────────────────────────────────────── */
+/* Браузер и раньше сшивал уход с приходом (@view-transition вверху), но делал
+   это единственным доступным ему способом — перекрёстным растворением, одним
+   и тем же в обе стороны. Отсюда и ощущение подмены кадра: переход был, а
+   направления у него не было.
+
+   Теперь направление есть. Витрина — три уровня глубины (главная → регион →
+   страна), app.js считает их по адресу и ставит на <html> data-nav="in|out".
+   Вглубь страница приходит справа и слегка сзади, наружу — наоборот. Это
+   ровно та же грамматика, что у стопки бумаг на столе. */
+::view-transition-old(root), ::view-transition-new(root) {
+  animation-duration: 0.42s;
+  animation-timing-function: var(--ease);
+}
+html[data-nav='in']::view-transition-old(root) {
+  animation-name: pg-out-in;
+}
+html[data-nav='in']::view-transition-new(root) {
+  animation-name: pg-in-in;
+}
+html[data-nav='out']::view-transition-old(root) {
+  animation-name: pg-out-out;
+}
+html[data-nav='out']::view-transition-new(root) {
+  animation-name: pg-in-out;
+}
+/* Уход всегда тише прихода: уходящая страница только отступает и гаснет,
+   приходящая — доезжает. Иначе два полноценных движения дерутся за внимание. */
+@keyframes pg-out-in { to { opacity: 0; transform: translateX(-2%) scale(0.985); } }
+@keyframes pg-in-in { from { opacity: 0; transform: translateX(3%); } }
+@keyframes pg-out-out { to { opacity: 0; transform: translateX(2%) scale(0.985); } }
+@keyframes pg-in-out { from { opacity: 0; transform: translateX(-3%); } }
+
+/* Морф страны. Клик по стране — в ленте, в атласе, в списке или на карте —
+   и её имя не исчезает вместе со страницей, а долетает до заголовка своей
+   страницы и там становится им. Имя перехода одно на весь сайт ('cty'), и
+   ставит его app.js ровно на тот узел, по которому кликнули: двух видимых
+   узлов с одним именем быть не может, а статикой в таблице их вышло бы
+   девяносто на страницу.
+
+   Это единственное место, где движение несёт смысл, а не обратную связь:
+   оно отвечает на вопрос «куда я попал», ещё до того как страница дорисуется. */
+::view-transition-group(cty) {
+  animation-duration: 0.46s;
+  animation-timing-function: var(--spring);
+}
+/* Растворение внутри морфа — короткое и с перекрытием: имя едет из мелкого
+   начертания в плакатное, и чем дольше два кегля видны одновременно, тем
+   заметнее, что старый снимок просто растянули. Геометрию тянет группа
+   (пружиной), краску — эти две строки. */
+::view-transition-old(cty) { animation: ink 0.14s ease reverse both; }
+::view-transition-new(cty) { animation: ink 0.26s 0.1s ease both; }
+
+body[data-country] .page__title { view-transition-name: cty; }
+/* Шапка и подвал не участвуют в перелистывании: они у всех страниц одни и те
+   же, и растворять их вместе со страницей — значит моргать корпусом прибора. */
+.top { view-transition-name: console-top; }
+.foot { view-transition-name: console-foot; }
+
+/* ── Смена темы ───────────────────────────────────────────────────────── */
+/* Раньше гамма переливалась целым кадром: честно, но безадресно — непонятно,
+   откуда взялась перемена. Теперь новая тема расходится кругом от самой
+   кнопки, как заливка от касания. Координаты центра ставит app.js.
+
+   Работает поверх той же startViewTransition, что и была: старый кадр стоит
+   на месте, новый вырезается растущим кругом. Свет по свету, а не встык. */
+html.is-theming::view-transition-old(root),
+html.is-theming::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+html.is-theming::view-transition-old(root) { z-index: 1; }
+html.is-theming::view-transition-new(root) {
+  z-index: 2;
+  animation: theme-wipe 0.62s var(--ease) both;
+}
+@keyframes theme-wipe {
+  from { clip-path: circle(0 at var(--tx, 50%) var(--ty, 0)); }
+  to { clip-path: circle(var(--tr, 150vmax) at var(--tx, 50%) var(--ty, 0)); }
+}
+
+/* ── Вскрытие заголовка ───────────────────────────────────────────────── */
+/* Заголовок главной проявляется развёрткой слева направо, а по её кромке идёт
+   светлая полоса — тот же жест, что и луч по карте ниже, только по прямой.
+   Витрина читает мир построчно, и первое, что она делает на глазах у
+   человека, — прочитывает собственное имя.
+
+   Разбирать заголовок на слова сценарием тут нельзя: главная весит под
+   мегабайт, браузер рисует её задолго до того, как отработает defer, и любое
+   скрытие из JS дало бы моргание готовым текстом. Клип на самом узле — чистый
+   CSS, ставится первым же кадром и не зависит ни от чего.
+
+   0.9с — дольше всего остального на витрине: это происходит один раз за
+   визит и ровно в тот момент, когда читателю ещё нечего делать. */
+@media (prefers-reduced-motion: no-preference) {
+  .home__title {
+    position: relative;
+    animation: scan-in 0.9s var(--ease) both;
+    animation-delay: 0.08s;
+  }
+  /* Кромка развёртки. Живёт ровно столько же, сколько сама развёртка, и
+     гаснет вместе с ней — вертикальный штрих, стоящий на месте после того,
+     как всё дорисовалось, читался бы как курсор ввода. */
+  .home__title::after {
+    content: '';
+    position: absolute;
+    inset-block: -0.06em;
+    left: 0;
+    width: 100%;
+    /* штрих стоит по левому краю полосы во всю ширину заголовка: тогда
+       translateX(100%) проносит его ровно от начала строки до её конца, и
+       ехать можно трансформом, а не координатой */
+    background: linear-gradient(to right, var(--sig-3) 0 2px, transparent 2px);
+    animation: scan-edge 0.9s var(--ease) both;
+    animation-delay: 0.08s;
+  }
+}
+@keyframes scan-in {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 -0.2em 0 0); }
+}
+@keyframes scan-edge {
+  0% { transform: translateX(0); opacity: 0; }
+  8% { opacity: 1; }
+  92% { opacity: 1; }
+  100% { transform: translateX(100%); opacity: 0; }
+}
+
+/* ── Развёртка карты ──────────────────────────────────────────────────── */
+/* Луч обходит карту по кругу, и каждая страна вспыхивает, когда он через неё
+   проходит. Задержку вспышки app.js берёт из угла страны относительно центра
+   карты — то есть страны загораются в том порядке, в каком их реально
+   встречает луч, а не по списку.
+
+   Ради этого всё и затевалось: витрина называется «Пеленг», и до сих пор это
+   было только словом в комментарии. Идёт один раз — при раскрытии карты или
+   при её появлении в кадре, — и больше не повторяется: развёртка, которая
+   крутится непрерывно, через минуту читается как индикатор загрузки. */
+.rmap__field { position: relative; overflow: hidden; }
+.rmap__field::after {
+  content: '';
+  position: absolute;
+  inset: -30%;
+  pointer-events: none;
+  opacity: 0;
+  background: conic-gradient(from 0deg,
+    color-mix(in oklab, var(--sig-3) 34%, transparent) 0deg,
+    transparent 34deg, transparent 360deg);
+  mask-image: radial-gradient(closest-side, #000 30%, transparent 100%);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rmap__field.is-sweep::after { animation: sweep 1.6s var(--ease) both; }
+  .rmap__field.is-sweep .rmap__land path,
+  .rmap__field.is-sweep .rmap__land circle {
+    animation: ping 0.7s ease both;
+    animation-delay: calc(var(--ang, 0) * 1.6s);
+  }
+}
+@keyframes sweep {
+  0% { opacity: 0; transform: rotate(-20deg); }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { opacity: 0; transform: rotate(345deg); }
+}
+/* Вспышка через filter, а не через fill: заливка страны несёт её ступень, и
+   перебивать её на время развёртки — значит на секунду соврать про величину. */
+@keyframes ping {
+  0% { filter: none; }
+  22% { filter: brightness(1.55) saturate(1.5) drop-shadow(0 0 6px var(--sig-3)); }
+  100% { filter: none; }
+}
+
+/* ── Пружины на отклике ───────────────────────────────────────────────── */
+/* Ячейка атласа, фишка региона, имя в «кто в новостях», подсказка поиска —
+   всё, что человек трогает десятки раз за визит, отвечает одной кривой с
+   массой вместо линейного сдвига. Разница в миллиметрах и в 0.2 секунды, но
+   именно она отделяет живой интерфейс от чертежа.
+
+   Только transform: сдвиг на пиксель по вертикали, компоновщику бесплатно. */
+@media (prefers-reduced-motion: no-preference) {
+  .atlas__cell a, .chips__item a, .who__item, .find__seed, .find__gbtn,
+  .ents button, .filter__opt {
+    transition: transform 0.34s var(--snap), color 0.14s ease,
+                background-color 0.14s ease, border-color 0.14s ease;
+  }
+  .atlas__cell a:hover, .chips__item a:hover, .who__item:hover,
+  .find__seed:hover, .find__gbtn:hover, .ents button:hover {
+    transform: translateY(-2px);
+  }
+  .atlas__cell a:active, .chips__item a:active, .who__item:active {
+    transform: translateY(0) scale(0.98);
+    transition-duration: 0.08s;
+  }
+
+  /* Атлас выезжает пружиной, а не по прямой: панель шириной в треть экрана,
+     доехавшая линейно, всегда выглядит так, будто её тянули за верёвку. */
+  .atlas { transition: transform 0.46s var(--spring), visibility 0.46s; }
+  .atlas__inner > * { transition: opacity 0.3s ease, transform 0.42s var(--spring); }
+}
+
+/* ── Строка ленты под курсором ────────────────────────────────────────── */
+/* Кромка важности слева разгорается и чуть утолщается — строка отзывается тем
+   же, чем она измеряется. Заголовок при этом уже едет вправо (правило выше),
+   и вместе получается, что строку взяли и подали вперёд. */
+.story:has(.story__sig)::before {
+  transition: filter 0.18s ease, border-inline-start-width 0.18s var(--snap),
+              box-shadow 0.22s ease;
+}
+.story:has(.story__sig):hover::before {
+  border-inline-start-width: 4px;
+  box-shadow: inset 3px 0 12px -6px var(--tier);
+}
+
 /* ── Ограничения движения ─────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
+  /* Развёртка, кромка заголовка и морф страны — целиком движение, поэтому не
+     замедляются, а не запускаются вовсе: ускоренная до миллисекунды развёртка
+     дала бы вспышку по всей карте разом. */
+  .rmap__field::after, .home__title::after { display: none; }
+  .home__title { clip-path: none !important; }
+  ::view-transition-group(cty) { animation: none; }
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;

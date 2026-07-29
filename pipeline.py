@@ -459,10 +459,13 @@ def embed_bodies(limit=None):
 
 # ── Фаза оценки важности ────────────────────────────────────────────────────
 
-def _score_prompt(country_disp):
+def _score_prompt():
     return (
         f"You are a senior analyst tracking science, technology and higher-education "
-        f"developments of NATIONAL significance for {country_disp}. For each news "
+        f"developments of NATIONAL significance. Each item carries its country in "
+        f"parentheses right after the id — judge national significance relative to "
+        f"THAT country, and note that different items may belong to different "
+        f"countries. For each news "
         f"item, FIRST decide topical relevance. It is ON-TOPIC only if its MAIN "
         f"subject is one of:\n"
         f"  A. Science / technology / higher-education POLICY — national strategy, "
@@ -579,15 +582,72 @@ def _group_for_scoring(rows):
     return list(reps.items()), groups
 
 
+def _score_pending(conn, pending, url_emb, day):
+    """Одна СКВОЗНАЯ очередь сюжетов -> запросы по settings.LLM_BATCH штук.
+
+    pending: [(country_disp, [url, ...], title, text), ...] — по одному элементу
+    на сюжет, urls — весь дубликат-кластер, на который пропагируется вердикт.
+
+    Батч набирается через границы стран, потому что критерии A-E от страны не
+    зависят: страна нужна только чтобы отмерить «национальную значимость», и
+    едет в строке айтема. Пока батч резался по стране, средний запрос несогласно
+    логам 2026-07-28 нёс 4.4 сюжета из 20, а 261 запрос из 647 — ровно один
+    сюжет: у страны за час просто не набирается двадцатка, и никогда не наберётся.
+    """
+    total = 0
+    for s in range(0, len(pending), settings.LLM_BATCH):
+        batch = pending[s:s + settings.LLM_BATCH]
+        user = "\n".join(
+            f"[id={i}] ({disp}) {(t or '').strip()}\n{re.sub(r'\s+',' ',(x or ''))[:800]}"
+            for i, (disp, _urls, t, x) in enumerate(batch, 1))
+        content = _call_openrouter_raw(_score_prompt(), user,
+                                       ref_url=f"batch/{len(batch)}")
+        if not content:
+            log.warning("  провайдеры молчат, батч из %d сюжетов отложен", len(batch))
+            continue
+        try:
+            scores = _parse_scores(content, len(batch))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("  разбор оценок не удался (%s) — батч из %d отложен",
+                        exc, len(batch))
+            continue
+        ups, marks, missing = [], [], 0
+        for i, (_disp, urls, _t, _x) in enumerate(batch, 1):
+            if i not in scores:
+                # Модель не вернула оценку по этому id. Ноль тут ставить нельзя:
+                # это вердикт «отклонено» по статье, которую никто не судил, и он
+                # же уйдёт в обучающую выборку. Оставляем importance=NULL —
+                # следующий прогон переоценит.
+                missing += 1
+                continue
+            sc = scores[i]
+            verdict = "accepted" if sc > settings.RELEVANCE_CUTOFF else "rejected"
+            for url in urls:
+                ups.append((sc, url))
+                marks.append((url, 0, verdict, url_emb.get(url)))
+        if missing:
+            log.warning("  модель пропустила %d/%d id — отложены до следующего прогона",
+                        missing, len(batch))
+        conn.executemany(
+            "UPDATE articles SET importance=?, scored_by='llm' WHERE url=?", ups)
+        seen_store.mark(conn, marks, day)
+        conn.commit()
+        total += len(ups)
+    return total
+
+
 def score():
-    """Оценивает важность необработанных статей (importance IS NULL) по странам.
+    """Оценивает важность необработанных статей (importance IS NULL).
     Перед обращением к LLM статьи внутри страны схлопываются по сюжету
     (см. _group_for_scoring) — экономия вызовов AI-API на дублях. Представители
     сначала проходят prefilter.drop_mask (уверенные отказы получают importance=0
     без обращения к LLM — та же схема, что у digest/daily_collector.py). Каждый
     вердикт (accepted/rejected по settings.RELEVANCE_CUTOFF, пропагирован на весь
     сюжет-дубликат) пишется в seen_urls вместе с эмбеддингом — размеченная выборка
-    для следующего train_prefilter.py."""
+    для следующего train_prefilter.py.
+
+    Дедуп и гейт идут по странам (сюжет — понятие внутристрановое), а сами
+    LLM-запросы — по одной сквозной очереди, см. _score_pending."""
     conn = db.connect()
     try:
         countries = [r[0] for r in conn.execute(
@@ -597,13 +657,16 @@ def score():
             return 0
         total = 0
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        # Сквозные на все страны: url — PRIMARY KEY в articles, коллизий нет.
+        pending = []   # [(country_disp, [url, ...], title, text), ...]
+        url_emb = {}   # url -> np.ndarray (seen_store.mark сам зовёт .tobytes(), сырой blob не подходит)
         for country in countries:
             rows = conn.execute(
                 "SELECT url,title,text,embedding,entities FROM articles "
                 "WHERE importance IS NULL AND country=? ORDER BY fetched_at DESC",
                 (country,)).fetchall()
-            # url -> np.ndarray (seen_store.mark сам вызывает .tobytes(), сырой blob не подходит)
-            url_emb = {r[0]: (np.frombuffer(r[3], np.float32) if r[3] else None) for r in rows}
+            url_emb.update(
+                {r[0]: (np.frombuffer(r[3], np.float32) if r[3] else None) for r in rows})
             disp = settings.country_display(country)
             items, groups = _group_for_scoring(rows)
 
@@ -649,43 +712,14 @@ def score():
 
             log.info("  %s: %d статей -> %d сюжетов на оценку LLM (сэкономлено %d обращений)",
                      country, len(rows), len(to_llm), len(rows) - len(to_llm))
-            for s in range(0, len(to_llm), settings.LLM_BATCH):
-                batch = to_llm[s:s + settings.LLM_BATCH]
-                user = "\n".join(
-                    f"[id={i}] {(t or '').strip()}\n{re.sub(r'\\s+',' ',(x or ''))[:800]}"
-                    for i, (_lab, (u, t, x, _emb)) in enumerate(batch, 1))
-                content = _call_openrouter_raw(_score_prompt(disp), user, ref_url=country)
-                if not content:
-                    log.warning("  %s: провайдеры молчат, батч отложен", country)
-                    continue
-                try:
-                    scores = _parse_scores(content, len(batch))
-                except Exception as exc:
-                    log.warning("  %s: разбор оценок не удался (%s)", country, exc)
-                    continue
-                ups, marks, missing = [], [], 0
-                for i, (lab, _rep) in enumerate(batch, 1):
-                    if i not in scores:
-                        # Модель не вернула оценку по этому id. Ноль тут ставить
-                        # нельзя: это вердикт «отклонено» по статье, которую
-                        # никто не судил, и он же уйдёт в обучающую выборку.
-                        # Оставляем importance=NULL — следующий прогон переоценит.
-                        missing += 1
-                        continue
-                    sc = scores[i]
-                    verdict = "accepted" if sc > settings.RELEVANCE_CUTOFF else "rejected"
-                    for url in groups[lab]:
-                        ups.append((sc, url))
-                        marks.append((url, 0, verdict, url_emb.get(url)))
-                if missing:
-                    log.warning("  %s: модель пропустила %d/%d id — отложены до "
-                                "следующего прогона", country, missing, len(batch))
-                conn.executemany(
-                    "UPDATE articles SET importance=?, scored_by='llm' WHERE url=?", ups)
-                seen_store.mark(conn, marks, day)
-                conn.commit()
-                total += len(ups)
-            log.info("  %s: оценено %d", country, len(rows))
+            pending.extend((disp, groups[lab], t, x)
+                           for lab, (_u, t, x, _emb) in to_llm)
+
+        batches = (len(pending) + settings.LLM_BATCH - 1) // settings.LLM_BATCH
+        log.info("В LLM: %d сюжетов сквозной очередью -> %d запросов "
+                 "(при батче по стране их было бы минимум %d)",
+                 len(pending), batches, len({d for d, _u, _t, _x in pending}))
+        total += _score_pending(conn, pending, url_emb, day)
         log.info("Оценка готова: %d статей", total)
         return total
     finally:

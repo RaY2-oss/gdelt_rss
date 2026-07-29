@@ -211,7 +211,8 @@ def test_score_propagates_verdict_to_duplicate_group_in_seen_urls():
 
     def fake_openrouter(system, user, ref_url=None):
         scores = {}
-        for m in re_mod.finditer(r"\[id=(\d+)\] (.*)", user):
+        # строка айтема: "[id=N] (Страна) Заголовок"
+        for m in re_mod.finditer(r"\[id=(\d+)\] \([^)]*\) (.*)", user):
             scores[m.group(1)] = 80 if m.group(2).startswith("Dup Story") else 2
         return json.dumps(scores)
 
@@ -226,6 +227,47 @@ def test_score_propagates_verdict_to_duplicate_group_in_seen_urls():
     assert verdicts["http://d/1"] == "accepted" and verdicts["http://d/2"] == "accepted", \
         "оба дубликата одного сюжета должны получить одинаковый вердикт"
     assert verdicts["http://d/3"] == "rejected"
+
+
+def test_score_batches_across_countries_in_one_request():
+    """Сквозная очередь: сюжеты разных стран едут ОДНИМ запросом, пока их меньше
+    LLM_BATCH, и каждый несёт свою страну в строке айтема. Пока батч резался по
+    стране, три страны по одной статье стоили три запроса вместо одного — это и
+    выжигало суточную квоту (см. logs 2026-07-28: 261 запрос из 647 нёс 1 сюжет)."""
+    from unittest.mock import patch
+    import json
+    import re as re_mod
+
+    db.init()
+    conn = db.connect()
+    for i, land in enumerate(("alphaland", "betaland", "gammaland")):
+        v = np.zeros(settings.EMBEDDING_DIM, np.float32); v[i] = 1
+        conn.execute("INSERT INTO articles (url,country,fetched_at,title,text,language,"
+                     "title_hash,embedding) VALUES (?,?,?,?,?,?,?,?)",
+                     (f"http://{land}/a", land, "2026-07-20T00:00:00+00:00",
+                      f"Story {land}", "text", "en", f"{land}h", v.tobytes()))
+    conn.commit()
+
+    calls = []
+
+    def fake_openrouter(system, user, ref_url=None):
+        calls.append(user)
+        ids = re_mod.findall(r"\[id=(\d+)\] ", user)
+        return json.dumps({i: True for i in ids})
+
+    with patch.object(pipeline.prefilter, "is_ready", return_value=False), \
+         patch.object(pipeline, "_call_openrouter_raw", side_effect=fake_openrouter):
+        pipeline.score()
+
+    assert len(calls) == 1, f"три страны должны уехать одним запросом, а не {len(calls)}"
+    for land in ("Alphaland", "Betaland", "Gammaland"):
+        assert f"({land})" in calls[0], f"страна {land} обязана быть в строке айтема"
+    # прежний запрос называл страну только в system-промпте — проверяем, что
+    # привязка id -> страна доехала и вердикт лёг на все три
+    got = dict(conn.execute(
+        "SELECT url, importance FROM articles WHERE url LIKE 'http://%land/a'"))
+    conn.close()
+    assert set(got.values()) == {settings.RELEVANT_SCORE}, got
 
 
 def _feed_row(url, title, vec, fetched, entities_cell="", t_ru=None, x_ru=None):

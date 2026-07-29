@@ -525,12 +525,132 @@
       // она переливается, а не моргает
       if (document.startViewTransition &&
           !matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        document.startViewTransition(flip);
+        // Новая гамма расходится кругом от самой кнопки, а не подменяет кадр
+        // целиком: перемена получает источник, и её видно откуда. Радиус —
+        // до самого дальнего угла экрана от центра кнопки, иначе круг
+        // остановится, не дойдя до края, и последний кадр моргнёт.
+        var b = button.getBoundingClientRect();
+        var x = b.left + b.width / 2;
+        var y = b.top + b.height / 2;
+        root.style.setProperty('--tx', x + 'px');
+        root.style.setProperty('--ty', y + 'px');
+        root.style.setProperty('--tr', Math.hypot(
+          Math.max(x, innerWidth - x), Math.max(y, innerHeight - y)) + 'px');
+        root.classList.add('is-theming');
+        var vt = document.startViewTransition(flip);
+        vt.finished.finally(function () { root.classList.remove('is-theming'); });
       } else {
         flip();
       }
     });
     night.addEventListener('change', sync);
     sync();
+  }
+})();
+
+// ── Пеленг: переходы и развёртка ────────────────────────────────────────
+// Три вещи, которые CSS не может знать сам: в какую сторону идёт переход, по
+// какой именно стране кликнули и под каким углом от центра карты лежит каждая
+// страна. Всё остальное в style.css, здесь только эти три ответа.
+(function () {
+  'use strict';
+
+  var root = document.documentElement;
+  var calm = matchMedia('(prefers-reduced-motion: reduce)');
+
+  // ── Направление перехода ──────────────────────────────────────────────
+  // Витрина — три уровня глубины: главная, регион, страна. Вглубь страница
+  // приходит справа, наружу — слева. Без этого браузер сшивает страницы
+  // одним и тем же растворением в обе стороны, и переход есть, а движения
+  // по стопке нет.
+  var depth = function (path) {
+    return path.indexOf('/c/') === 0 ? 2 : path.indexOf('/r/') === 0 ? 1 : 0;
+  };
+
+  if ('onpageswap' in window) {
+    // Уход: адрес назначения известен только здесь, до того как документ
+    // сменится. Ставим направление на уходящий документ — снимок для
+    // ::view-transition-old берётся с него.
+    addEventListener('pageswap', function (e) {
+      if (!e.viewTransition) return;
+      var to = e.activation && e.activation.entry && e.activation.entry.url;
+      if (!to) return;
+      root.dataset.nav = depth(new URL(to).pathname) >= depth(location.pathname)
+        ? 'in' : 'out';
+    });
+    // Приход: направление приходится вычислять заново — новый документ о
+    // предыдущем знает только из e.activation.from.
+    addEventListener('pagereveal', function (e) {
+      if (!e.viewTransition) return;
+      var from = e.viewTransition && e.activation && e.activation.from
+        && e.activation.from.url;
+      root.dataset.nav = from &&
+        depth(new URL(from).pathname) > depth(location.pathname) ? 'out' : 'in';
+    });
+  }
+
+  // ── Морф страны ───────────────────────────────────────────────────────
+  // Имя страны — в ленте, в атласе, в списке региона или на карте — не
+  // исчезает вместе со страницей, а долетает до заголовка своей страницы.
+  // Имя перехода одно ('cty', см. ::view-transition-group в style.css), и
+  // висеть оно должно ровно на одном видимом узле, поэтому ставится по
+  // клику, а не разметкой: иначе на странице региона их было бы сорок.
+  //
+  // Снимается на pagehide — иначе имя останется на узле в кэше «назад» и
+  // при возврате столкнётся с заголовком, который тоже 'cty'.
+  var tagged = null;
+  document.addEventListener('click', function (e) {
+    if (calm.matches || !document.startViewTransition) return;
+    var a = e.target.closest && e.target.closest('a[href*="/c/"]');
+    if (!a || a.target || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    // на карте имя страны — это <a class="rmap__land"> с фигурой внутри;
+    // морфить фигуру в текст нечестно, ей достаточно общего перехода
+    if (a.classList.contains('rmap__land')) return;
+    if (tagged) tagged.style.viewTransitionName = '';
+    tagged = a.querySelector('.atlas__cname') || a;
+    tagged.style.viewTransitionName = 'cty';
+  }, true);
+  addEventListener('pagehide', function () {
+    if (tagged) { tagged.style.viewTransitionName = ''; tagged = null; }
+  });
+
+  // ── Развёртка карты ───────────────────────────────────────────────────
+  // Луч обходит карту по кругу, страна вспыхивает, когда он через неё
+  // проходит. Порядок задаёт не список, а геометрия: --ang — доля оборота
+  // от полудня по часовой стрелке до центра страны, и CSS умножает её на
+  // длительность оборота.
+  //
+  // getBBox по девяноста фигурам — один принудительный пересчёт компоновки,
+  // поэтому считаем ровно раз и только когда карта действительно показалась.
+  var field = document.querySelector('[data-map]');
+  if (field && !calm.matches) {
+    var swept = false;
+    var sweep = function () {
+      if (swept) return;
+      swept = true;
+      var box = field.querySelector('svg').viewBox.baseVal;
+      var cx = box.x + box.width / 2;
+      var cy = box.y + box.height / 2;
+      Array.prototype.forEach.call(
+        field.querySelectorAll('.rmap__land'), function (land) {
+          var b = land.getBBox();
+          var a = Math.atan2(b.y + b.height / 2 - cy, b.x + b.width / 2 - cx);
+          // atan2 отсчитывает от трёх часов против часовой; развёртка идёт от
+          // полудня по часовой, отсюда поворот на четверть и остаток от 1
+          land.style.setProperty('--ang', ((a / (2 * Math.PI) + 1.25) % 1).toFixed(3));
+        });
+      field.classList.add('is-sweep');
+    };
+
+    var box = field.closest('details');
+    if (box) box.addEventListener('toggle', function () { if (box.open) sweep(); });
+    if (window.IntersectionObserver) {
+      var io = new IntersectionObserver(function (rows) {
+        rows.forEach(function (r) {
+          if (r.isIntersecting) { sweep(); io.disconnect(); }
+        });
+      }, { threshold: 0.35 });
+      io.observe(field);
+    }
   }
 })();
