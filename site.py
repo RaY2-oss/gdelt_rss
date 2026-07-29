@@ -352,6 +352,20 @@ def _plural(n, one, few, many):
     return many
 
 
+def _safe_url(url):
+    """Пропускает только http(s)-адреса, остальное схлопывает в "#".
+
+    Адреса приходят из GDELT, то есть от третьей стороны, и уезжают прямо в
+    href=. Jinja-автоэкранирование тут не помогает: "javascript:..." не ломает
+    кавычек, но выполняется по клику. Чистим на входе в контекст рендера, а не
+    в шаблонах — иначе проверку придётся повторять в каждом новом href."""
+    if not isinstance(url, str):
+        return "#"
+    if url.strip().lower().startswith(("http://", "https://")):
+        return url
+    return "#"
+
+
 def window_rows(conn, country, hours):
     """Те же колонки и тот же порог, что у `feeds.build_country`."""
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
@@ -403,7 +417,7 @@ def stories(conn, rows, country, now):
             d = imp.domain(m[0])
             if d and d not in seen_domains:
                 seen_domains.add(d)
-                sources.append({"domain": d, "url": m[0]})
+                sources.append({"domain": d, "url": _safe_url(m[0])})
         dt = _pubdate(pdate, fetched)
         # Структурная важность приходит в [0,1] (importance.structural); шкала
         # 0-100 — только для показа, столбик и ступень тона считают по ней.
@@ -411,7 +425,7 @@ def stories(conn, rows, country, now):
         head = sources[0]["domain"] if sources else ""
         clean = _clean_title(t_ru or t_en or title, head) or url
         out.append({
-            "url": url,
+            "url": _safe_url(url),
             "title": clean,
             # оригинал показываем, только если он реально другой (был перевод)
             "orig_title": _clean_title(title, head) if (t_ru or t_en) and title else "",
