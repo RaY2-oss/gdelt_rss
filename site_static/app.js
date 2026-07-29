@@ -180,9 +180,11 @@
       facets(narrowed ? rows : []);
 
       listBox.textContent = '';
-      rows.slice(0, LIMIT).forEach(function (s) {
+      rows.slice(0, LIMIT).forEach(function (s, i) {
         var li = el('li', 'find__row');
         li.style.setProperty('--w', s[3]);
+        // волна проявления: потолок задержки — чтобы хвост списка не ждал
+        li.style.setProperty('--i', Math.min(i, 14));
         li.dataset.tier = tier(s[3]);
         var a = el('a', 'find__link', s[0]);
         a.href = s[4];

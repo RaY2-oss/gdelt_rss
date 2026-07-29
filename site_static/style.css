@@ -120,8 +120,10 @@
 /* Полоса дат прячет строки через [hidden], а у строки ленты свой display:
    grid — авторское правило бьёт браузерное по происхождению, а не по весу,
    поэтому спрятанное оставалось на экране. Одно !important дешевле, чем
-   держать :not([hidden]) во всех правилах ленты. */
-[hidden] { display: none !important; }
+   держать :not([hidden]) во всех правилах ленты.
+   pointer-events: скрытое теперь доживает на экране до конца перехода, и слой
+   поиска успевал перехватить клик уже после закрытия. */
+[hidden] { display: none !important; pointer-events: none; }
 
 /* Переходы между страницами. Одна строка вместо роутера: браузер сам сшивает
    уход и приход, ссылки остаются обычными ссылками. */
@@ -421,7 +423,6 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
   z-index: 35;
   background: rgb(5 9 14 / 55%);
   backdrop-filter: blur(2px);
-  animation: fade 0.24s ease both;
 }
 
 .atlas__head {
@@ -789,10 +790,9 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
 .rmap__read {
   display: grid;
   gap: 0.125rem;
+  z-index: 1; /* показание лежит поверх подсказки: они меняются растворением */
   border-inline-start: 2px solid var(--tier);
-  animation: rise 0.22s cubic-bezier(0.16, 0.84, 0.28, 1);
 }
-.rmap__read[hidden] { display: none; }
 
 .rmap__cty { font: 700 0.9375rem/1.2 var(--font-display); letter-spacing: -0.02em; }
 .rmap__num {
@@ -1077,11 +1077,7 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
   border: 1px solid var(--rule-strong);
   border-radius: var(--r);
   box-shadow: 0 0.75rem 1.75rem color-mix(in oklab, var(--ink) 14%, transparent);
-  /* показ — смена display, поэтому анимация запускается заново на каждом
-     появлении; переход тут не сработал бы */
-  animation: drop 0.18s cubic-bezier(0.16, 0.84, 0.28, 1);
 }
-.filter__sugg[hidden] { display: none; }
 .filter__opt {
   display: flex;
   gap: 0.5rem;
@@ -1493,7 +1489,6 @@ body[data-region='southern_africa'] {
   z-index: 50;
   background: rgb(5 9 14 / 62%);
   backdrop-filter: blur(3px);
-  animation: fade 0.2s ease both;
   overscroll-behavior: contain;
 }
 
@@ -1504,7 +1499,6 @@ body[data-region='southern_africa'] {
   background: var(--surface);
   border-bottom: 1px solid var(--rule-strong);
   box-shadow: 0 1.5rem 3rem rgb(0 0 0 / 35%);
-  animation: drop 0.28s cubic-bezier(0.16, 0.84, 0.28, 1) both;
 }
 
 .find__top {
@@ -1732,8 +1726,6 @@ body[data-region='southern_africa'] {
   color: var(--ink-2);
 }
 
-@keyframes fade { from { opacity: 0; } }
-@keyframes drop { from { opacity: 0; transform: translateY(-0.75rem); } }
 
 /* ── Подвал: нижняя стенка консоли ────────────────────────────────────── */
 .foot {
@@ -1775,14 +1767,19 @@ body[data-region='southern_africa'] {
   @media (prefers-reduced-motion: no-preference) {
     /* Строка ленты выплывает снизу и справа, входя в кадр: не просто
        проявляется на месте, а доезжает до своего места. Диапазон короткий —
-       строка должна быть готова к чтению задолго до середины экрана. */
+       строка должна быть готова к чтению задолго до середины экрана.
+
+       Заливка backwards, а не both: за границей диапазона анимация отпускает
+       прозрачность и сдвиг, и ими может распоряжаться transition — иначе
+       строка, спрятанная фильтром, гасла бы рывком, потому что анимация
+       всегда бьёт переход. Видимой разницы нет: конечный кадр и есть базовый. */
     .story:not(.story--lead), .chips__item, .who__list li {
-      animation: rise linear both;
+      animation: rise linear backwards;
       animation-timeline: view();
       animation-range: entry 0% entry 38%;
     }
     .rmap, .foot__row {
-      animation: rise linear both;
+      animation: rise linear backwards;
       animation-timeline: view();
       animation-range: entry 0% entry 55%;
     }
@@ -1799,7 +1796,6 @@ body[data-region='southern_africa'] {
 }
 
 @keyframes ink { from { opacity: 0; } }
-@keyframes drop { from { opacity: 0; transform: translateY(-0.375rem); } }
 
 @keyframes rise { from { opacity: 0; transform: translate(0.75rem, 2rem); } }
 @keyframes drift { to { transform: translateY(-14vh); } }
@@ -1825,7 +1821,7 @@ body[data-region='southern_africa'] {
    возникали рывком. Здесь движение по времени, лесенкой сверху вниз. */
 @media (prefers-reduced-motion: no-preference) {
   .crumbs, .page__head, .tools, .story--lead, .chips, .who {
-    animation: rise 0.7s cubic-bezier(0.16, 0.84, 0.28, 1) both;
+    animation: rise 0.7s cubic-bezier(0.16, 0.84, 0.28, 1) backwards;
   }
   .page__head { animation-delay: 0.05s; }
   .chips, .who, .tools { animation-delay: 0.11s; }
@@ -1860,6 +1856,66 @@ body[data-region='southern_africa'] {
     /* Раскрытому узлу клип больше не нужен, а подсказкам фильтра он мешает:
        выпадающий список выходит за пульт и обрезался ровно по его краю. */
     .tools[open]::details-content { overflow: visible; }
+  }
+}
+
+/* Появление и уход. Всё, что прячется через [hidden], раньше пропадало
+   подменой кадра: фильтр, полоса дат, подсказки, фасеты поиска и оба слоя
+   поверх страницы. display переходится только дискретно, зато браузер держит
+   видимое значение до конца перехода — прозрачность успевает доехать до нуля
+   прежде, чем узел исчезнет. @starting-style закрывает обратный ход: у узла,
+   пришедшего из display:none, иначе нет состояния, из которого ехать. */
+@media (prefers-reduced-motion: no-preference) {
+  .feed .story, .story--lead, .feed__none, .days__reset, .filter__sugg,
+  .find__groups, .find__tags, .find__seeds {
+    transition: opacity 0.22s ease,
+                transform 0.22s cubic-bezier(0.16, 0.84, 0.28, 1),
+                display 0.22s allow-discrete;
+  }
+  :is(.feed .story, .story--lead, .feed__none, .days__reset, .filter__sugg,
+      .find__groups, .find__tags, .find__seeds)[hidden] {
+    opacity: 0;
+    transform: translateY(-0.375rem);
+  }
+  @starting-style {
+    .feed .story, .story--lead, .feed__none, .days__reset, .filter__sugg,
+    .find__groups, .find__tags, .find__seeds {
+      opacity: 0;
+      transform: translateY(-0.375rem);
+    }
+  }
+
+  /* Показание карты и подсказка лежат друг на друге и меняются растворением:
+     на быстром обходе карты подмена кадра мигала. */
+  .rmap__read, .rmap__hint {
+    transition: opacity 0.16s ease, display 0.16s allow-discrete;
+  }
+  .rmap__read[hidden], .rmap__hint[hidden] { opacity: 0; }
+  @starting-style { .rmap__read:not([hidden]) { opacity: 0; } }
+
+  /* Слои поверх страницы: затемнение проявляется, панель поиска въезжает
+     сверху — и тем же ходом уходят. Раньше открытие было плавным, а закрытие
+     рывком: на анимации это и не сделать, у неё нет обратного хода. */
+  .find, .atlas__scrim {
+    transition: opacity 0.24s ease, display 0.24s allow-discrete;
+  }
+  .find[hidden], .atlas__scrim[hidden] { opacity: 0; }
+  .find__panel {
+    transition: opacity 0.28s ease,
+                transform 0.28s cubic-bezier(0.16, 0.84, 0.28, 1);
+  }
+  .find[hidden] .find__panel { opacity: 0; transform: translateY(-1rem); }
+  @starting-style {
+    .find, .atlas__scrim { opacity: 0; }
+    .find__panel { opacity: 0; transform: translateY(-1rem); }
+  }
+
+  /* Выдача поиска пересобирается на каждую букву, переходить там нечему —
+     строки проявляются волной. Задержка упирается в потолок: иначе на сотне
+     строк хвост ждал бы своей очереди целую секунду. */
+  .find__row {
+    animation: ink 0.2s ease backwards;
+    animation-delay: calc(var(--i, 0) * 12ms);
   }
 }
 
