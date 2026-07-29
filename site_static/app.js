@@ -437,6 +437,31 @@
     });
   }
 
+  // ── Показание карты ───────────────────────────────────────────────────
+  // Страна на карте держит своё показание в data-атрибутах, а строка под полем
+  // одна на всех: восемьдесят девять её копий в разметке ради обхода без
+  // скрипта стоили бы дороже этих десяти строк.
+  var field = q$('[data-map]');
+  if (field) {
+    var read = field.querySelector('[data-map-read]');
+    var hint = field.querySelector('.rmap__hint');
+    var show = function (e) {
+      var land = e.target.closest ? e.target.closest('.rmap__land') : null;
+      if (!land) return;
+      read.dataset.tier = land.dataset.tier;
+      read.querySelector('.rmap__cty').textContent = land.dataset.cty;
+      read.querySelector('.rmap__num').textContent = land.dataset.n;
+      read.querySelector('.rmap__ttl').textContent = land.dataset.ttl;
+      read.hidden = false;
+      hint.hidden = true;
+    };
+    var hide = function () { read.hidden = true; hint.hidden = false; };
+    field.addEventListener('mouseover', show);
+    field.addEventListener('focusin', show);
+    field.addEventListener('mouseleave', hide);
+    field.addEventListener('focusout', hide);
+  }
+
   // ── Свернуть текст снизу ──────────────────────────────────────────────
   // Второй <summary> в <details> невозможен, а дочитавшему до конца незачем
   // листать к началу, чтобы закрыть. Три строки вместо своего аккордеона.
@@ -468,24 +493,42 @@
   }
 
   // ── Тема ──────────────────────────────────────────────────────────────
-  var order = ['auto', 'light', 'dark'];
-  var names = { auto: 'Тема: как в системе', light: 'Тема: светлая', dark: 'Тема: тёмная' };
+  // Два состояния, а не три. Было «как в системе → светлая → тёмная», и у
+  // читателя со светлой системой первое нажатие ничего не меняло: кнопка
+  // казалась тугой, хотя честно отрабатывала. Теперь нажатие всегда даёт
+  // противоположное тому, что человек видит сейчас; «как в системе» осталось
+  // умолчанием до первого нажатия.
   var button = q$('.theme');
-
   if (button) {
+    var night = matchMedia('(prefers-color-scheme: dark)');
+    var shown = function () {
+      var t = root.dataset.theme;
+      return t === 'light' || t === 'dark' ? t : (night.matches ? 'dark' : 'light');
+    };
     var sync = function () {
-      button.title = names[root.dataset.theme] || names.auto;
+      var dark = shown() === 'dark';
+      button.title = dark ? 'Тема: тёмная — включить светлую'
+                          : 'Тема: светлая — включить тёмную';
       button.setAttribute('aria-label', button.title);
+      button.setAttribute('aria-pressed', dark ? 'true' : 'false');
+    };
+    var flip = function () {
+      var next = shown() === 'dark' ? 'light' : 'dark';
+      root.dataset.theme = next;
+      try { localStorage.setItem('theme', next); } catch (e) {}
+      sync();
     };
     button.addEventListener('click', function () {
-      var next = order[(order.indexOf(root.dataset.theme) + 1) % order.length];
-      root.dataset.theme = next;
-      try {
-        if (next === 'auto') localStorage.removeItem('theme');
-        else localStorage.setItem('theme', next);
-      } catch (e) {}
-      sync();
+      // смена гаммы — самый резкий кадр на сайте; там, где браузер умеет,
+      // она переливается, а не моргает
+      if (document.startViewTransition &&
+          !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        document.startViewTransition(flip);
+      } else {
+        flip();
+      }
     });
+    night.addEventListener('change', sync);
     sync();
   }
 })();

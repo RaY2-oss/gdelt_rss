@@ -98,12 +98,11 @@ REGIONS = [
       "namibia", "madagascar", "malawi", "mauritius"]),
 ]
 
-# Центроиды стран, градусы (долгота, широта). Из них строится карта охвата на
-# главной: точка на равнопромежуточной проекции, без единого килобайта
-# геометрии границ. Очертания континентов складываются из самих точек — это
-# радар станций, а не политическая карта, и для витрины ровно то, что нужно.
-# Микрогосударства чуть разведены руками (Макао, Бахрейн, Сингапур, Гамбия):
-# в масштабе 166° разница в полградуса — это три пикселя, и точки слипались.
+# Центроиды стран, градусы (долгота, широта). Карта на главной рисует страны в
+# границах (data/borders.json), но на 110-м масштабе Сингапуру, Бахрейну,
+# Гонконгу, Макао, Мальдивам и Маврикию фигуры не досталось — они остаются
+# точками вот отсюда. Микрогосударства чуть разведены руками: в масштабе 166°
+# разница в полградуса — это три пикселя, и точки слипались.
 GEO = {
     "india": (79, 22), "pakistan": (69, 30), "bangladesh": (90, 24),
     "sri_lanka": (81, 7.5), "nepal": (84, 28.4), "bhutan": (90.5, 27.6),
@@ -142,6 +141,15 @@ GEO = {
 # Рамка карты. Шире охвата стран на пару градусов с каждой стороны, чтобы
 # крайние точки (Гамбия, Япония, ЮАР) не липли к краю поля.
 GEO_BOX = (-21, 146, 52, -33)  # запад, восток, север, юг
+
+# Границы стран: готовые пути SVG, собраны из Natural Earth 110m один раз
+# (make_borders.py). Единица — десятая доля градуса от левого верхнего угла
+# рамки, поэтому viewBox карты и есть размер рамки в этих единицах.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "data", "borders.json")) as _fh:
+    BORDERS = json.load(_fh)
+MAP_W = (GEO_BOX[1] - GEO_BOX[0]) * 10
+MAP_H = (GEO_BOX[2] - GEO_BOX[3]) * 10
 
 RU_COUNTRY = {
     "india": "Индия", "pakistan": "Пакистан", "bangladesh": "Бангладеш",
@@ -541,32 +549,39 @@ def days(now, have=(), span=None):
 
 
 def map_dots(by_country):
-    """Карта охвата: страна — кружок на своём месте по координатам GEO.
+    """Карта охвата: страна — своя фигура в границах, заливка по важности.
 
-    Размер точки — сколько сюжетов (по корню: площадь пропорциональна числу,
-    иначе Индия накрывает половину Южной Азии), заливка — важность верхнего
-    сюжета, той же шкалой, что и лента. Мелкие точки идут последними и потому
-    лежат сверху: страна с тремя сюжетами не должна пропадать под соседкой с
-    тремя сотнями.
+    Границы лежат готовыми путями SVG в data/borders.json (см. make_borders.py)
+    в системе координат карты: десятые доли градуса от левого верхнего угла
+    рамки. Шести микрогосударствам (Сингапур, Бахрейн, Гонконг, Макао,
+    Мальдивы, Маврикий) на 110-м масштабе фигуры не досталось — они остаются
+    точками по координатам GEO, иначе просто исчезли бы с карты.
+
+    Заливка — важность верхнего сюжета той же шкалой, что и лента; сколько
+    сюжетов, говорит показание при наведении. Точки идут последними и потому
+    лежат поверх фигур.
     """
     west, east, north, south = GEO_BOX
-    peak = max([len(v) for v in by_country.values()] or [1]) or 1
     out = []
     for c, items in by_country.items():
-        lon, lat = GEO[c]
         top = items[0] if items else None
-        out.append({
+        s = {
             "key": c,
             "name": RU_COUNTRY.get(c, settings.country_display(c)),
-            "x": round((lon - west) / (east - west) * 100, 2),
-            "y": round((north - lat) / (north - south) * 100, 2),
             "n": len(items),
-            "r": round(5 + 11 * (len(items) / peak) ** 0.5, 1),
             "score": top["score"] if top else 0,
             "tier": _tier(top["score"]) if top else 0,
             "title": top["title"] if top else "",
-        })
-    out.sort(key=lambda d: -d["n"])
+            "d": BORDERS["paths"].get(c, ""),
+        }
+        if not s["d"]:
+            lon, lat = GEO[c]
+            s["x"] = round((lon - west) * 10)
+            s["y"] = round((north - lat) * 10)
+        out.append(s)
+    # сначала фигуры, потом точки; внутри — по числу сюжетов, чтобы тихая
+    # страна не пропадала под шумной соседкой
+    out.sort(key=lambda s: (not s["d"], -s["n"]))
     return out
 
 
@@ -706,7 +721,8 @@ def build(out_dir=OUT_DIR):
            env.get_template("index.html").render(
                lead=lead,
                items=everything[1:HOME_LIMIT], total=len(everything),
-               dots=map_dots(by_country), **ctx))
+               dots=map_dots(by_country), map_rest=BORDERS["rest"],
+               map_w=MAP_W, map_h=MAP_H, **ctx))
 
     for region in regions:
         _write(os.path.join(out_dir, "r", f"{region['slug']}.html"),
@@ -754,17 +770,19 @@ def _selfcheck():
     assert set(RU_COUNTRY) == set(settings.COUNTRIES), "нет русского имени страны"
     assert set(GEO) == set(settings.COUNTRIES), "страна без координат на карте"
 
-    # карта: точка стоит внутри рамки, крупная страна крупнее мелкой
+    # карта: рамка сходится с той, по которой считаны границы; у всех стран
+    # есть либо фигура, либо точка внутри поля
+    assert BORDERS["box"] == list(GEO_BOX), "границы считаны по другой рамке"
     dots = map_dots({"india": [{"score": 96, "title": "т"}] * 40,
-                     "japan": [{"score": 40, "title": "т"}],
+                     "singapore": [{"score": 40, "title": "т"}],
                      "morocco": []})
-    assert all(0 < d["x"] < 100 and 0 < d["y"] < 100 for d in dots)
     by = {d["key"]: d for d in dots}
-    assert by["india"]["r"] > by["japan"]["r"] > by["morocco"]["r"]
-    assert by["india"]["x"] < by["japan"]["x"]      # Индия западнее Японии
-    assert by["morocco"]["y"] < by["india"]["y"]    # Марокко севернее Индии
-    assert [d["key"] for d in dots][-1] == "morocco"  # пустая страна сверху
+    assert by["india"]["d"] and by["morocco"]["d"], "страна без границ"
+    assert not by["singapore"]["d"], "Сингапур на 110m — точка"
+    assert 0 < by["singapore"]["x"] < MAP_W and 0 < by["singapore"]["y"] < MAP_H
+    assert [d["key"] for d in dots][-1] == "singapore"  # точки поверх фигур
     assert by["morocco"]["tier"] == 0 and by["india"]["tier"] == 4
+    assert set(BORDERS["paths"]) | set(BORDERS["dots"]) == set(settings.COUNTRIES)
 
     assert _snippet("") == ""
     assert _snippet("Короткий текст.") == "Короткий текст."
