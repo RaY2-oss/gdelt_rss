@@ -2127,6 +2127,12 @@ body[data-country] .page__title { view-transition-name: cty; }
 
    Работает поверх той же startViewTransition, что и была: старый кадр стоит
    на месте, новый вырезается растущим кругом. Свет по свету, а не встык. */
+/* Корпус прибора на время смены гаммы перестаёт быть отдельной группой:
+   иначе шапка и подвал растворялись бы сами по себе, пока поле страницы
+   вырезается кругом, и круг проходил бы сквозь них, не задев. Класс ставится
+   ДО startViewTransition — снимок берётся уже без имён. */
+html.is-theming .top, html.is-theming .foot,
+html.is-theming .page__title { view-transition-name: none; }
 html.is-theming::view-transition-old(root),
 html.is-theming::view-transition-new(root) {
   animation: none;
@@ -2160,6 +2166,13 @@ html.is-theming::view-transition-new(root) {
     position: relative;
     animation: scan-in 0.9s var(--ease) both;
     animation-delay: 0.08s;
+    /* clip, а не hidden: кромка уезжает на ширину заголовка вправо, и на
+       узком экране это дало бы горизонтальную прокрутку всей страницы.
+       overflow: clip обрезает, но прокручиваемого переполнения не создаёт
+       вовсе; запас в четверть кегля оставлен под выносные элементы — при
+       межстрочном 0.95 «у» и «р» иначе срезало бы по хвостам. */
+    overflow: clip;
+    overflow-clip-margin: 0.25em;
   }
   /* Кромка развёртки. Живёт ровно столько же, сколько сама развёртка, и
      гаснет вместе с ней — вертикальный штрих, стоящий на месте после того,
@@ -2207,9 +2220,12 @@ html.is-theming::view-transition-new(root) {
   pointer-events: none;
   opacity: 0;
   background: conic-gradient(from 0deg,
-    color-mix(in oklab, var(--sig-3) 34%, transparent) 0deg,
-    transparent 34deg, transparent 360deg);
-  mask-image: radial-gradient(closest-side, #000 30%, transparent 100%);
+    color-mix(in oklab, var(--sig-3) 48%, transparent) 0deg,
+    color-mix(in oklab, var(--sig-3) 10%, transparent) 18deg,
+    transparent 40deg, transparent 360deg);
+  /* farthest-side, а не closest-side: карта вдвое шире своей высоты, и по
+     короткой стороне луч гас, не дойдя до Африки и Японии. */
+  mask-image: radial-gradient(farthest-side, #000 22%, transparent 96%);
 }
 @media (prefers-reduced-motion: no-preference) {
   .rmap__field.is-sweep::after { animation: sweep 1.6s var(--ease) both; }

@@ -536,9 +536,16 @@
         root.style.setProperty('--ty', y + 'px');
         root.style.setProperty('--tr', Math.hypot(
           Math.max(x, innerWidth - x), Math.max(y, innerHeight - y)) + 'px');
+        var off = function () { root.classList.remove('is-theming'); };
         root.classList.add('is-theming');
         var vt = document.startViewTransition(flip);
-        vt.finished.finally(function () { root.classList.remove('is-theming'); });
+        // then(off, off), а не finally: нажатие в первую секунду после
+        // перехода между страницами прерывает переход, finished отклоняется, и
+        // на <html> оставался класс — он снимает имена перехода с шапки и
+        // заголовка, то есть портил бы СЛЕДУЮЩИЙ морф страны. Страховка
+        // временем — на случай, когда переход не разрешается вовсе.
+        vt.finished.then(off, off);
+        setTimeout(off, 1200);
       } else {
         flip();
       }
@@ -579,11 +586,13 @@
         ? 'in' : 'out';
     });
     // Приход: направление приходится вычислять заново — новый документ о
-    // предыдущем знает только из e.activation.from.
+    // предыдущем знает только из e.activation.from. Кнопка «назад» — всегда
+    // наружу, откуда бы ни возвращались: у неё своё направление, и оно
+    // сильнее глубины адресов.
     addEventListener('pagereveal', function (e) {
-      if (!e.viewTransition) return;
-      var from = e.viewTransition && e.activation && e.activation.from
-        && e.activation.from.url;
+      var nav = performance.getEntriesByType('navigation')[0];
+      if (nav && nav.type === 'back_forward') { root.dataset.nav = 'out'; return; }
+      var from = e.activation && e.activation.from && e.activation.from.url;
       root.dataset.nav = from &&
         depth(new URL(from).pathname) > depth(location.pathname) ? 'out' : 'in';
     });
