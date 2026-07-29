@@ -1077,6 +1077,9 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
   border: 1px solid var(--rule-strong);
   border-radius: var(--r);
   box-shadow: 0 0.75rem 1.75rem color-mix(in oklab, var(--ink) 14%, transparent);
+  /* показ — смена display, поэтому анимация запускается заново на каждом
+     появлении; переход тут не сработал бы */
+  animation: drop 0.18s cubic-bezier(0.16, 0.84, 0.28, 1);
 }
 .filter__sugg[hidden] { display: none; }
 .filter__opt {
@@ -1796,6 +1799,7 @@ body[data-region='southern_africa'] {
 }
 
 @keyframes ink { from { opacity: 0; } }
+@keyframes drop { from { opacity: 0; transform: translateY(-0.375rem); } }
 
 @keyframes rise { from { opacity: 0; transform: translate(0.75rem, 2rem); } }
 @keyframes drift { to { transform: translateY(-14vh); } }
