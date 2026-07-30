@@ -1142,6 +1142,19 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
 }
 .story:last-child { border-bottom: 0; }
 
+/* Строка вне кадра не рисуется вовсе. На главной их сто, на Китае полтораста, и
+   у каждой свой градиент из четырёх color-mix, <details> с текстом и список
+   источников — восемь килобайт разметки на строку. Браузер держит в работе
+   только то, что близко к экрану, и рывки на прокрутке кончаются: считать
+   каждый кадр приходится единицы строк, а не полторы сотни.
+   Проявление при прокрутке от этого не страдает: строка становится «нужной» за
+   полэкрана до появления, то есть раньше, чем начнётся её диапазон entry.
+   auto в contain-intrinsic-size: первая мера настоящая, дальше помнится. */
+.story:not(.story--lead) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 12rem;
+}
+
 .story:has(.story__sig) {
   display: grid;
   grid-template-columns: clamp(2.25rem, 5vw, 3rem) minmax(0, 1fr);
@@ -2075,6 +2088,13 @@ html::after {
   animation-duration: 0.42s;
   animation-timing-function: var(--ease);
 }
+/* Направление по умолчанию — вглубь. Там, где pageswap/pagereveal нет (Safari
+   до 26, Firefox) или где data-nav не успел встать, браузер сшивал страницы
+   своим растворением: переход есть, направления нет. Правила ниже — с
+   data-nav — специфичнее и перебивают это, когда направление известно. */
+::view-transition-old(root) { animation-name: pg-out-in; }
+::view-transition-new(root) { animation-name: pg-in-in; }
+
 html[data-nav='in']::view-transition-old(root) {
   animation-name: pg-out-in;
 }
@@ -2115,6 +2135,15 @@ html[data-nav='out']::view-transition-new(root) {
 ::view-transition-new(cty) { animation: ink 0.26s 0.1s ease both; }
 
 body[data-country] .page__title { view-transition-name: cty; }
+/* Уход со страницы страны на страницу другой страны — самый частый путь на
+   витрине (атлас открыт на каждой странице). Имя 'cty' в этот момент уже висит
+   на заголовке ЭТОЙ страницы, а двух видимых узлов с одним именем браузер не
+   сшивает: он отменяет переход ЦЕЛИКОМ — вместе с перелистыванием, а не только
+   с морфом. Отсюда и «на ПК переходов не видно»: стоило один раз уйти в страну,
+   и дальше каждый переход между странами отменялся молча.
+   Поэтому на время ухода заголовок отдаёт имя: морфит то, по чему кликнули.
+   Класс ставит app.js по клику — до того, как берётся снимок. */
+html.is-morph .page__title { view-transition-name: none; }
 /* Шапка и подвал не участвуют в перелистывании: они у всех страниц одни и те
    же, и растворять их вместе со страницей — значит моргать корпусом прибора. */
 .top { view-transition-name: console-top; }
@@ -2290,6 +2319,40 @@ html.is-theming::view-transition-new(root) {
   box-shadow: inset 3px 0 12px -6px var(--tier);
 }
 
+/* ── Цена движения на телефоне ────────────────────────────────────────── */
+/* Гаснет не движение, а слои во весь экран, которые пересобирают весь кадр на
+   каждый пиксель прокрутки. Переходы между страницами, проявление строк,
+   пружины на касании и развёртка карты остаются — на глаз пропадает фактура,
+   а не движение.
+   Условие по указателю, а не по ширине: дело в GPU телефона, а не в размере
+   окна — узкое окно на настольной машине всё это переживает. */
+@media (hover: none) {
+  /* Зерно: mix-blend-mode во весь экран — лишний проход по кадру на каждый
+     кадр. На четырёхстах точках на дюйм трёх процентов шума и не видно. */
+  html::after { display: none; }
+
+  /* Параллакс: подложки остаются на месте, движется только страница.
+     Закреплённый слой с маской, который едет от прокрутки, перерисовывается
+     целиком каждый кадр — это и есть главный рывок на длинной ленте. */
+  body[data-region]::before, body[data-home]::before,
+  body[data-region]::after, body[data-home]::after { animation: none; }
+
+  /* Размытие под слоями поверх страницы: выдача поиска пересобирается на каждую
+     букву, и на каждую букву заново размывается вся страница под ней.
+     Затемнение и без размытия отделяет слой от страницы. */
+  .find, .atlas__scrim { backdrop-filter: none; }
+
+  /* Вспышка страны — прозрачностью, а не фильтром: brightness с drop-shadow на
+     девяноста фигурах даёт девяносто отдельных поверхностей за один оборот
+     луча. Пульс остаётся пульсом, только теперь в тень, а не в свет. */
+  .rmap__field.is-sweep .rmap__land path,
+  .rmap__field.is-sweep .rmap__land circle { animation-name: ping-dim; }
+}
+@keyframes ping-dim {
+  0%, 100% { opacity: 1; }
+  22% { opacity: 0.4; }
+}
+
 /* ── Ограничения движения ─────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   /* Развёртка, кромка заголовка и морф страны — целиком движение, поэтому не
@@ -2298,13 +2361,25 @@ html.is-theming::view-transition-new(root) {
   .rmap__field::after, .home__title::after { display: none; }
   .home__title { clip-path: none !important; }
   ::view-transition-group(cty) { animation: none; }
+  /* Параллакс считает таймлайн прокрутки, длительности у него нет — гасить
+     нечего, приходится снимать саму анимацию. */
+  body[data-region]::before, body[data-home]::before,
+  body[data-region]::after, body[data-home]::after { animation: none !important; }
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
-  @view-transition { navigation: none; }
+  /* А вот переход между страницами остаётся — только без сдвига, растворением.
+     Просьба о тишине — про движение: сдвиг, параллакс, развёртку, пружины.
+     Растворение не движение. Раньше здесь стояло navigation: none, и на любой
+     машине с выключенными системными анимациями (в Windows это один флажок,
+     и он выключен у многих) витрина теряла не половину слоя движения, а весь:
+     страницы снова сменялись подменой кадра. Звёздочка выше сюда не достаёт —
+     ::view-transition-* не элементы, их приходится гасить отдельно. */
+  ::view-transition-old(root) { animation: ink 0.2s ease reverse both !important; }
+  ::view-transition-new(root) { animation: ink 0.2s ease both !important; }
 }
 
 @media print {

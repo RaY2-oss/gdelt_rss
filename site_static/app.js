@@ -618,8 +618,14 @@
     if (tagged) tagged.style.viewTransitionName = '';
     tagged = a.querySelector('.atlas__cname') || a;
     tagged.style.viewTransitionName = 'cty';
+    // На странице страны имя 'cty' уже висит на её заголовке (style.css), а два
+    // видимых узла с одним именем браузер не сшивает — он отменяет переход
+    // целиком, вместе с перелистыванием. Класс снимает имя с заголовка на время
+    // ухода; ставится по клику, то есть до снимка.
+    root.classList.add('is-morph');
   }, true);
   addEventListener('pagehide', function () {
+    root.classList.remove('is-morph');
     if (tagged) { tagged.style.viewTransitionName = ''; tagged = null; }
   });
 
