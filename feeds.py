@@ -45,7 +45,18 @@ _SELECT = ("SELECT url,title,text,publish_date,fetched_at,importance,embedding,"
 
 _TOKEN_RE = re.compile(r"[^\w]+")
 _TOKEN_MIN_LEN = 4
-_MIN_SHARED_TOKENS = 2
+# Сколько общих "редких" токенов заголовка подтверждают один сюжет. Было 2 —
+# слишком дёшево: двух слов вроде 'deal'+'into' или 'news'+'today' хватало,
+# чтобы склеить разные сюжеты, а склейка прячет статью из фида навсегда.
+# Судья — косинус ТЕЛ, мостику неизвестный (замер на суточном окне, 1265 пар,
+# слитых только мостиком): у пары РАЗНЫХ сюжетов косинус тел ~0.80-0.85, у
+# одного сюжета 0.87+.
+#   2 токена — 995 пар, тело >= 0.87 лишь у 23 %  (в основном ложь)
+#   3 токена — 118 пар, 51 %                      (монетка)
+#   4 токена — 135 пар, 97 %                      (сигнал настоящий)
+# Настоящие дубли, потерянные на пути с 2 до 4, ловит канал тел
+# (DEDUP_BODY_COSINE), которому мостик и был подпоркой.
+_MIN_SHARED_TOKENS = 4
 
 
 def _distinctive_tokens(titles, exclude=()):
@@ -75,7 +86,8 @@ def _distinctive_tokens(titles, exclude=()):
     return [{t for t in toks if doc_freq[t] <= cutoff and t not in excl} for toks in tokensets]
 
 
-def _cluster(embs, threshold, titles=None, exclude=(), bodies=None):
+def _cluster(embs, threshold, titles=None, exclude=(), bodies=None,
+             body_threshold=None):
     """Жадная кластеризация по косинусу, построчно (без матрицы n*n).
 
     titles (опц.): пары в [DEDUP_LEXICAL_FLOOR, threshold) — семантически
@@ -84,14 +96,15 @@ def _cluster(embs, threshold, titles=None, exclude=(), bodies=None):
     заголовка. Косинус >= threshold мержится безусловно.
 
     bodies (опц.): эмбеддинги ТЕЛ, None у тех, где тело ещё не досчитано.
-    Считаются ОТДЕЛЬНОЙ матрицей и объединяются по ИЛИ: тела ловят дубли,
-    которые заголовки роняют («India's Rs 4.78 Lakh Crore Energy Storage Plan»
-    и «47 GW battery storage, 23 GW pumped storage projects in pipeline» — один
-    документ, косинус тел 0.958, косинус заголовков 0.859). Смешивать вектора
-    заголовка и тела в ОДНОЙ матрице нельзя: это разные пространства, косинус
-    между ними ~0.8 даже у точного дубля, и дедуп разваливается — тела
-    досчитываются отдельной стадией, в суточном окне их пока 27 %. Строка без
-    тела получает нулевой вектор: её косинус ко всем 0, порога не достигает."""
+    Считаются ОТДЕЛЬНОЙ матрицей, со СВОИМ порогом (DEDUP_BODY_COSINE, ниже
+    заголовочного — см. комментарий в settings) и объединяются по ИЛИ: тела
+    ловят дубли, которые заголовки роняют («India's Rs 4.78 Lakh Crore Energy
+    Storage Plan» и «47 GW battery storage, 23 GW pumped storage projects in
+    pipeline» — один документ, косинус тел 0.958, косинус заголовков 0.859).
+    Смешивать вектора заголовка и тела в ОДНОЙ матрице нельзя: это разные
+    пространства, косинус между ними ~0.8 даже у точного дубля, и дедуп
+    разваливается — тела досчитываются отдельной стадией. Строка без тела
+    получает нулевой вектор: её косинус ко всем 0, порога не достигает."""
     n = len(embs)
     if n == 0:
         return np.zeros(0, int)
@@ -103,6 +116,7 @@ def _cluster(embs, threshold, titles=None, exclude=(), bodies=None):
     E = unit(embs)
     B = unit([b if b is not None else np.zeros(E.shape[1], np.float32)
               for b in bodies]) if bodies is not None else None
+    b_th = settings.DEDUP_BODY_COSINE if body_threshold is None else body_threshold
     lex = _distinctive_tokens(titles, exclude) if titles else None
     labels = np.full(n, -1, int)
     nxt = 0
@@ -112,7 +126,7 @@ def _cluster(embs, threshold, titles=None, exclude=(), bodies=None):
         sims = E @ E[i]
         match = sims >= threshold
         if B is not None:
-            match = match | (B @ B[i] >= threshold)
+            match = match | (B @ B[i] >= b_th)
         if lex is not None and lex[i]:
             floor_ok = sims >= settings.DEDUP_LEXICAL_FLOOR
             shared = np.array([len(lex[i] & lex[j]) >= _MIN_SHARED_TOKENS for j in range(n)])
@@ -192,9 +206,10 @@ def cluster_rows(rows, country):
     одно и то же разбиение, иначе они показывают разные представители сюжета.
     """
     embs = [np.frombuffer(r[6], np.float32) for r in rows]
-    # Тела — вторым сигналом, порог тот же: распределения косинусов почти
-    # совпадают (медиана 0.806 против 0.800, p99 0.874 против 0.879), а дубли
-    # тела ловят те, что заголовки роняют (см. _cluster).
+    # Тела — вторым сигналом, со своим порогом DEDUP_BODY_COSINE: совпадение
+    # МАРГИНАЛЬНЫХ распределений косинусов (медиана 0.806 против 0.800) ещё не
+    # значит, что порог годится один — важно, как канал разводит дубли и разные
+    # сюжеты, а тела разводят их лучше заголовков (см. settings).
     bodies = [np.frombuffer(r[10], np.float32) if r[10] else None for r in rows]
     # title_en, если уже закэширован с прошлого прогона (см. translate.py) —
     # мостит кросс-языковые дубли, которых сырой заголовок мостить не может

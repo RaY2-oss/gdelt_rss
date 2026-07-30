@@ -486,7 +486,13 @@ def _score_prompt():
         f"how-to or personal health/medical tips; routine stock-price or "
         f"single-company share moves; accidents, disasters or weather; sport, "
         f"culture, food, entertainment or human interest; general politics, diplomacy "
-        f"or military news with no concrete science/technology substance; or an "
+        f"or elections with no concrete science/technology substance; military and "
+        f"defence news — strikes, attacks, drone or missile launches, war, troop, "
+        f"fleet or air-defence movements, arms sales and deliveries, or an admiring "
+        f"write-up of a weapon system's capabilities — EVEN IF it is dense with "
+        f"technical detail: a weapon being advanced technology does not make the "
+        f"item a science or technology story (a domestic defence-INDUSTRIAL R&D or "
+        f"manufacturing programme still counts under A or C); or an "
         f"opinion piece, interview or propaganda. The topic must be what the article "
         f"is ACTUALLY about — a passing mention does not count. "
         f"Judge by content, not language. This is a yes/no relevance decision only "
@@ -582,6 +588,64 @@ def _group_for_scoring(rows):
     return list(reps.items()), groups
 
 
+def _reuse_known_verdicts(conn, country, items, groups, url_emb, day):
+    """Сюжет, уже осуждённый LLM в ПРОШЛОМ прогоне, заново не спрашиваем.
+
+    _group_for_scoring схлопывает дубли ВНУТРИ прогона, но GDELT отдаёт одно
+    событие часами: следующие издания подхватывают его в 19:17, потом в 20:17 —
+    и каждый час сюжет уезжал в LLM как новый. Порог тот же DEDUP_COSINE: если
+    0.95 означает «один сюжет» внутри прогона, между прогонами он означает то
+    же самое.
+
+    Замер на 7 днях (93 прогона, 26 057 сюжетов): -9.9 % обращений, причём при
+    переспросе LLM соглашалась со своим же прошлым вердиктом лишь в 85.9 %
+    случаев. То есть переспрашивать — не уточнять, а бросать монетку на
+    несогласии модели с самой собой; ожидаемая точность от копирования не
+    меняется, а вызов экономится.
+
+    Источник — только вердикты самой LLM (scored_by NULL/'llm'): не решения
+    гейта и не прошлые копии, иначе вердикт уезжал бы по цепочке дублей всё
+    дальше от того, что кто-либо действительно судил.
+
+    -> (оставшиеся items, сколько статей закрыто копией)
+    """
+    past = conn.execute(
+        "SELECT embedding, importance FROM articles "
+        "WHERE country=? AND importance IS NOT NULL AND embedding IS NOT NULL "
+        "AND (scored_by IS NULL OR scored_by='llm') "
+        "AND fetched_at >= datetime('now', ?)",
+        (country, f"-{settings.KEEP_HOURS} hours")).fetchall()
+    if not past:
+        return items, 0
+    P = np.array([np.frombuffer(r[0], np.float32) for r in past], np.float32)
+    P /= np.linalg.norm(P, axis=1, keepdims=True) + 1e-10
+    imp = [r[1] for r in past]
+
+    fresh, ups, marks = [], [], []
+    for lab_rep in items:
+        lab, (_u, _t, _x, emb) = lab_rep
+        sims = P @ (emb / (np.linalg.norm(emb) + 1e-10))
+        j = int(np.argmax(sims))
+        if sims[j] < settings.DEDUP_COSINE:
+            fresh.append(lab_rep)
+            continue
+        sc = int(imp[j])
+        verdict = "accepted" if sc > settings.RELEVANCE_CUTOFF else "rejected"
+        for url in groups[lab]:
+            ups.append((sc, url))
+            marks.append((url, 0, verdict, url_emb.get(url)))
+    if ups:
+        # scored_by='dup' — как и 'gate', вне обучающей выборки: это копия уже
+        # учтённой метки, а не независимое суждение.
+        conn.executemany(
+            "UPDATE articles SET importance=?, scored_by='dup' WHERE url=?", ups)
+        seen_store.mark(conn, marks, day)
+        conn.commit()
+        log.info("  %s: %d сюжетов судили в прошлых прогонах — вердикт скопирован",
+                 country, len(items) - len(fresh))
+    return fresh, len(ups)
+
+
 def _score_pending(conn, pending, url_emb, day):
     """Одна СКВОЗНАЯ очередь сюжетов -> запросы по settings.LLM_BATCH штук.
 
@@ -669,6 +733,12 @@ def score():
                 {r[0]: (np.frombuffer(r[3], np.float32) if r[3] else None) for r in rows})
             disp = settings.country_display(country)
             items, groups = _group_for_scoring(rows)
+
+            # Порядок важен: копия вердикта — прямое свидетельство (тот же
+            # сюжет уже судили), гейт — лишь предсказание. Сначала свидетельство.
+            items, n_dup = _reuse_known_verdicts(
+                conn, country, items, groups, url_emb, day)
+            total += n_dup
 
             to_llm = items
             if prefilter.is_ready(settings.PREFILTER_PATH):

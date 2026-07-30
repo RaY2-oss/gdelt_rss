@@ -12,7 +12,7 @@ settings.LOG_DIR = tempfile.mkdtemp()
 settings.TOP_N = 3
 
 import db, feeds, pipeline
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 def test_parse_scores():
@@ -102,6 +102,63 @@ def test_score_gate_drops_confident_rejects_without_llm():
                      ("http://prefland/drop",)).fetchone()
     conn.close()
     assert v == ("rejected", v_drop.tobytes())
+
+
+def test_score_reuses_verdict_from_previous_run():
+    """Сюжет, осуждённый LLM час назад, не покупается у неё второй раз.
+
+    Внутрипрогонный дедуп такое не ловит: статьи приезжают в РАЗНЫХ прогонах,
+    и до этой стадии каждый час уходил повторный вызов на тот же сюжет
+    (-9.9 % обращений на замере за 7 дней). Копия помечается scored_by='dup' —
+    независимой меткой она не является и в обучение идти не должна.
+    """
+    from unittest.mock import patch
+    import json
+
+    db.init()
+    conn = db.connect()
+    now = datetime.now(timezone.utc)
+    old = (now - timedelta(hours=1)).isoformat()
+    v_seen = np.zeros(settings.EMBEDDING_DIM, np.float32); v_seen[0] = 1
+    v_new = np.zeros(settings.EMBEDDING_DIM, np.float32); v_new[1] = 1
+    ins = ("INSERT INTO articles (url,country,fetched_at,title,text,language,"
+           "title_hash,embedding,importance,scored_by) VALUES (?,?,?,?,?,?,?,?,?,?)")
+    conn.execute(ins, ("http://dupland/old", "dupland", old, "Fab Story", "text",
+                       "en", "dl1", v_seen.tobytes(), settings.RELEVANT_SCORE, "llm"))
+    # тот же сюжет, другое издание, следующий прогон — косинус 1.0
+    conn.execute(ins, ("http://dupland/again", "dupland", now.isoformat(),
+                       "Fab Story reprint", "text", "en", "dl2",
+                       v_seen.tobytes(), None, None))
+    # чужой сюжет: ортогонален, копировать не с чего
+    conn.execute(ins, ("http://dupland/other", "dupland", now.isoformat(),
+                       "Other Story", "text", "en", "dl3",
+                       v_new.tobytes(), None, None))
+    conn.commit()
+
+    calls = []
+
+    def fake_openrouter(system, user, ref_url=None):
+        calls.append(user)
+        return json.dumps({"1": True})
+
+    with patch.object(pipeline.prefilter, "is_ready", return_value=False), \
+         patch.object(pipeline, "_call_openrouter_raw", side_effect=fake_openrouter):
+        pipeline.score()
+
+    assert len(calls) == 1, "повторный сюжет не должен уезжать в LLM"
+    assert "Other Story" in calls[0] and "Fab Story" not in calls[0]
+
+    row = lambda u: conn.execute(
+        "SELECT importance, scored_by FROM articles WHERE url=?", (u,)).fetchone()
+    assert row("http://dupland/again") == (settings.RELEVANT_SCORE, "dup")
+    assert row("http://dupland/other") == (settings.RELEVANT_SCORE, "llm")
+
+    # Копия не должна становиться обучающей меткой: train_prefilter берёт
+    # только scored_by IS NULL или 'llm'.
+    n = conn.execute("SELECT COUNT(*) FROM articles WHERE scored_by='dup' "
+                     "AND (scored_by IS NULL OR scored_by='llm')").fetchone()[0]
+    conn.close()
+    assert n == 0
 
 
 def test_score_gate_accepts_without_llm():
@@ -368,6 +425,27 @@ def test_cluster_excludes_country_token_from_lexical_bridge():
     assert labels[0] != labels[1], "общие 'india'+'sparked' не должны в одиночку сливать разные сюжеты"
 
 
+def test_cluster_lexical_bridge_ignores_two_generic_tokens():
+    """Прод-баг (фид Саудовской Аравии, 30.07): сделка по авиации Bombardier
+    попала в кластер ядерной сделки США — Саудовской Аравии, потому что
+    заголовки делили 'deal' и 'into'. Косинус тел у этой пары 0.818 — разные
+    сюжеты, — но старого порога в 2 общих токена хватало.
+
+    Ложное слияние дороже пропущенного: пропущенное показывает дубль, ложное
+    прячет статью из фида совсем."""
+    titles = [
+        "The US-Saudi nuclear deal isn't dead - it's dragging Washington into quicksand",
+        "Saudi Arabia's THC expands into business aviation with Bombardier deal",
+        "Trump administration revives talks on the Saudi nuclear deal framework",
+    ]
+    embs = [_vec_at_cosine(1.0, seed=1),
+            _vec_at_cosine(0.85, seed=1),   # выше DEDUP_LEXICAL_FLOOR, ниже 0.95
+            _vec_at_cosine(0.86, seed=1)]
+    exclude = feeds._TOKEN_RE.split("saudi arabia")
+    labels = feeds._cluster(embs, settings.DEDUP_COSINE, titles=titles, exclude=exclude)
+    assert labels[0] != labels[1], "'deal'+'into' — не подтверждение одного сюжета"
+
+
 def test_cluster_bodies_merge_what_titles_miss():
     """Тела — второй сигнал по ИЛИ, а не замена заголовочному.
 
@@ -395,6 +473,29 @@ def test_cluster_bodies_merge_what_titles_miss():
     solo = feeds._cluster([_vec_at_cosine(1.0, seed=1), _vec_at_cosine(0.70, seed=2)],
                           settings.DEDUP_COSINE, bodies=[None, None])
     assert solo[0] != solo[1], "нулевые вектора не должны сливать статьи без тел"
+
+
+def test_body_threshold_is_lower_than_title_threshold():
+    """У тел СВОЙ порог, ниже заголовочного (DEDUP_BODY_COSINE).
+
+    Прод-случай: ядерная сделка США — Саудовская Аравия (28.07) разъехалась на
+    7 позиций фида при косинусах тел 0.816..0.939 — до общего 0.95 не доходила
+    ни одна пара, канал тел молчал целиком. Тела разделяют сюжеты лучше
+    заголовков (внутри сюжета p10 = 0.870 против p90 = 0.851 между сюжетами),
+    так что порог им нужен ниже, а не тот же.
+
+    Проверяем обе границы: 0.92 (между body- и title-порогом) обязан слить,
+    0.88 — нет, иначе порог сполз бы в шум."""
+    assert settings.DEDUP_BODY_COSINE < settings.DEDUP_COSINE
+    far = [_vec_at_cosine(1.0, seed=1), _vec_at_cosine(0.70, seed=1)]  # заголовки врозь
+
+    near = feeds._cluster(far, settings.DEDUP_COSINE,
+                          bodies=[_vec_at_cosine(1.0, seed=9), _vec_at_cosine(0.92, seed=9)])
+    assert near[0] == near[1], "косинус тел 0.92 — один сюжет, обязан слиться"
+
+    apart = feeds._cluster(far, settings.DEDUP_COSINE,
+                           bodies=[_vec_at_cosine(1.0, seed=9), _vec_at_cosine(0.88, seed=9)])
+    assert apart[0] != apart[1], "косинус тел 0.88 ниже порога — сливать нельзя"
 
 
 def test_build_country_writes_xml():
