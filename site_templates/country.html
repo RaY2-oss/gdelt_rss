@@ -4,7 +4,7 @@
 {% set current_country = country %}
 
 {% block title %}{{ country_ru }} — {{ site_title }}{% endblock %}
-{% block description %}Наука и технологии: {{ country_ru }}. {{ total }} {{ total|plural('сюжет','сюжета','сюжетов') }} за неделю, по убыванию важности.{% endblock %}
+{% block description %}Наука и технологии: {{ country_ru }}. {{ total }} {{ total|plural('сюжет','сюжета','сюжетов') }} за {{ period_acc }}, по убыванию важности.{% endblock %}
 
 {% block content %}
 <section class="page wrap">
@@ -30,7 +30,7 @@
   <section class="who">
     <h2 class="who__title">Кто в новостях</h2>
     <p class="who__note">
-      Число — сколько раз имя встретилось за неделю. Нажмите, чтобы найти все
+      Число — сколько раз имя встретилось за {{ period_acc }}. Нажмите, чтобы найти все
       сюжеты с ним; поиск откроется уже суженным до страны.
     </p>
     <ul class="who__list">
@@ -47,6 +47,6 @@
 
   {% if items %}{{ tools(days, 'Тема, имя или издание') }}{% endif %}
 
-  {{ feed(items, False, 'За неделю ничего не набралось. Загляните позже.') }}
+  {{ feed(items, False, 'За ' ~ period_acc ~ ' ничего не набралось. Загляните позже.') }}
 </section>
 {% endblock %}

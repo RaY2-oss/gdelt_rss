@@ -578,7 +578,7 @@ def _group_for_scoring(rows):
     groups = {label: [url, ...]} все url внутри сюжета, включая представителя.
     """
     embs = [np.frombuffer(r[3], np.float32) for r in rows]
-    labels = feeds._cluster(embs, settings.DEDUP_COSINE, titles=[r[1] for r in rows])
+    labels = feeds._cluster(embs, settings.DEDUP_COSINE)
     groups, reps = {}, {}
     for r, emb, lab in zip(rows, embs, labels):   # r может нести лишние колонки
         url, title, text = r[0], r[1], r[2]
@@ -614,7 +614,7 @@ def _reuse_known_verdicts(conn, country, items, groups, url_emb, day):
         "WHERE country=? AND importance IS NOT NULL AND embedding IS NOT NULL "
         "AND (scored_by IS NULL OR scored_by='llm') "
         "AND fetched_at >= datetime('now', ?)",
-        (country, f"-{settings.KEEP_HOURS} hours")).fetchall()
+        (country, f"-{settings.VERDICT_REUSE_HOURS} hours")).fetchall()
     if not past:
         return items, 0
     P = np.array([np.frombuffer(r[0], np.float32) for r in past], np.float32)

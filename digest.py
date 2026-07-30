@@ -72,7 +72,7 @@ def build_country_digest(conn, country, day=None):
     # Кластеризация и важность — те же, что у фида и витрины (feeds.py): три
     # ленты обязаны считать один и тот же сюжет одним и тем же, иначе дайджест
     # выносит наверх то, чего в фиде рядом нет.
-    clusters = feeds.cluster_rows(rows, country)
+    clusters = feeds.cluster_rows(rows)
     cluster_imp = dict(feeds.rank(clusters))
 
     # Сравнивать с уже отправленным надо тем же эмбеддингом, каким считается

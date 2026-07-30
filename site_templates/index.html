@@ -49,7 +49,7 @@
     </div>
 
     <div class="story__body">
-      <p class="lead__eyebrow">Верх недели</p>
+      <p class="lead__eyebrow">Верх {{ period_gen }}</p>
       <h2 class="lead__title">
         <a class="story__link" href="{{ lead.url }}" rel="noopener nofollow" {% if lead.lang_code %}lang="{{ lead.lang_code }}"{% endif %}>{{ lead.title }}</a>
       </h2>
@@ -72,6 +72,6 @@
   </article>
   {% endif %}
 
-  {{ feed(items, True, 'За неделю ничего не набралось.', 2) }}
+  {{ feed(items, True, 'За ' ~ period_acc ~ ' ничего не набралось.', 2) }}
 </section>
 {% endblock %}

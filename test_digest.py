@@ -106,13 +106,13 @@ def test_one_entry_per_cluster_across_days():
     # сюжет: статья вчера + статья сегодня по тому же сюжету (importance выше
     # RELEVANCE_CUTOFF, иначе фильтр build_country_digest их не видит)
     conn.execute("INSERT INTO articles (url,country,fetched_at,publish_date,title,text,"
-                 "language,title_hash,embedding,importance) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                 "language,title_hash,embedding,embedding_body,importance) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                  ("http://x/y", "india", NOW, YDAY, "old", "body", "en", "h1",
-                  v.tobytes(), 50))
+                  v.tobytes(), v.tobytes(), 50))
     conn.execute("INSERT INTO articles (url,country,fetched_at,publish_date,title,text,"
-                 "language,title_hash,embedding,importance) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                 "language,title_hash,embedding,embedding_body,importance) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                  ("http://x/z", "india", NOW, TODAY, "new", "body2", "en", "h2",
-                  v.tobytes(), 50))
+                  v.tobytes(), v.tobytes(), 50))
     conn.commit()
     n = digest.build_country_digest(conn, "india", day=TODAY)
     conn.close()
@@ -125,9 +125,9 @@ def test_older_story_without_fresh_article_still_qualifies():
     db.init()
     conn = db.connect()
     conn.execute("INSERT INTO articles (url,country,fetched_at,publish_date,title,text,"
-                 "language,title_hash,embedding,importance) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                 "language,title_hash,embedding,embedding_body,importance) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                  ("http://x/old-only", "nepal", NOW, YDAY, "старый сюжет", "тело",
-                  "ru", "hold", _v(5).tobytes(), 60))
+                  "ru", "hold", _v(5).tobytes(), _v(5).tobytes(), 60))
     conn.commit()
     n = digest.build_country_digest(conn, "nepal", day=TODAY)
     conn.close()
@@ -141,9 +141,9 @@ def test_cross_day_no_repeat():
     conn.execute("INSERT INTO digest_sent (url,country,digest_date,embedding) VALUES (?,?,?,?)",
                  ("http://old", "india", YDAY, v.tobytes()))
     conn.execute("INSERT INTO articles (url,country,fetched_at,publish_date,title,text,"
-                 "language,title_hash,embedding,importance) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                 "language,title_hash,embedding,embedding_body,importance) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                  ("http://x/new-day-same-story", "india", NOW, TODAY, "t", "body",
-                  "en", "h3", v.tobytes(), 90))
+                  "en", "h3", v.tobytes(), v.tobytes(), 90))
     conn.commit()
     n = digest.build_country_digest(conn, "india", day=TODAY)
     conn.close()
@@ -160,9 +160,9 @@ def test_build_country_digest_translates_non_en_ru():
     conn = db.connect()
     v = _v(4)
     conn.execute("INSERT INTO articles (url,country,fetched_at,publish_date,title,text,"
-                 "language,title_hash,embedding,importance) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                 "language,title_hash,embedding,embedding_body,importance) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                  ("http://x/zh", "china", NOW, TODAY, "中文标题", "正文内容",
-                  "zh-cn", "hzh", v.tobytes(), 90))
+                  "zh-cn", "hzh", v.tobytes(), v.tobytes(), 90))
     conn.commit()
 
     with patch.object(translate_mod, "_translate", side_effect=lambda t, source="auto": f"EN::{t}"):

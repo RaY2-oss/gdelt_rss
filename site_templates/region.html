@@ -3,7 +3,7 @@
 {% set current_region = region.slug %}
 
 {% block title %}{{ region.name }} — {{ site_title }}{% endblock %}
-{% block description %}Наука и технологии: {{ region.name }}. {{ region.n }} {{ region.n|plural('сюжет','сюжета','сюжетов') }} за неделю, по убыванию важности.{% endblock %}
+{% block description %}Наука и технологии: {{ region.name }}. {{ region.n }} {{ region.n|plural('сюжет','сюжета','сюжетов') }} за {{ period_acc }}, по убыванию важности.{% endblock %}
 
 {% block content %}
 <section class="page wrap">
@@ -30,6 +30,6 @@
 
   {{ tools(days, 'Тема, страна, имя или издание') }}
 
-  {{ feed(items, True, 'За неделю в регионе ничего не набралось.') }}
+  {{ feed(items, True, 'За ' ~ period_acc ~ ' в регионе ничего не набралось.') }}
 </section>
 {% endblock %}

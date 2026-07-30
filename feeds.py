@@ -20,7 +20,6 @@ nginx rss_proxy для FreshRSS).
 """
 import logging
 import os
-import re
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -43,95 +42,30 @@ _SELECT = ("SELECT url,title,text,publish_date,fetched_at,importance,embedding,"
            "language,title_en,text_en,embedding_body,entities,title_ru,text_ru "
            "FROM articles ")
 
-_TOKEN_RE = re.compile(r"[^\w]+")
-_TOKEN_MIN_LEN = 4
-# Сколько общих "редких" токенов заголовка подтверждают один сюжет. Было 2 —
-# слишком дёшево: двух слов вроде 'deal'+'into' или 'news'+'today' хватало,
-# чтобы склеить разные сюжеты, а склейка прячет статью из фида навсегда.
-# Судья — косинус ТЕЛ, мостику неизвестный (замер на суточном окне, 1265 пар,
-# слитых только мостиком): у пары РАЗНЫХ сюжетов косинус тел ~0.80-0.85, у
-# одного сюжета 0.87+.
-#   2 токена — 995 пар, тело >= 0.87 лишь у 23 %  (в основном ложь)
-#   3 токена — 118 пар, 51 %                      (монетка)
-#   4 токена — 135 пар, 97 %                      (сигнал настоящий)
-# Настоящие дубли, потерянные на пути с 2 до 4, ловит канал тел
-# (DEDUP_BODY_COSINE), которому мостик и был подпоркой.
-_MIN_SHARED_TOKENS = 4
-
-
-def _distinctive_tokens(titles, exclude=()):
-    """Токены заголовков за вычетом общей для батча лексики темы/страны
-    (India, AI, energy...) — остаётся в основном специфика конкретного
-    события (Bhargavastra, HCLTech, Odisha), общая для разных изданий об
-    одном сюжете, но не между разными сюжетами.
-
-    exclude: токены страны (country_display) — они частые в ЛЮБОМ батче
-    этой страны по построению, так что не несут различительной силы и
-    исключаются вне зависимости от DF (иначе ложно бриджуют случайные пары
-    вроде "India"+"sparked" в двух вообще не связанных заголовках).
-
-    cutoff растёт с размером батча (не наивный fixed-6 потолок): вирусный
-    сюжет может доминировать сотнями пересказов на разных языках — тогда
-    его же специфичная лексика (Pradhan, resigns...) становится "частой"
-    относительно всего батча и раньше отсеивалась как общая, из-за чего
-    дубликаты не мержились."""
-    tokensets = [{t for t in _TOKEN_RE.split((title or "").lower()) if len(t) >= _TOKEN_MIN_LEN}
-                 for title in titles]
-    doc_freq = {}
-    for toks in tokensets:
-        for t in toks:
-            doc_freq[t] = doc_freq.get(t, 0) + 1
-    cutoff = max(2, round(len(titles) * 0.35))
-    excl = {e.lower() for e in exclude}
-    return [{t for t in toks if doc_freq[t] <= cutoff and t not in excl} for toks in tokensets]
-
-
-def _cluster(embs, threshold, titles=None, exclude=(), bodies=None,
-             body_threshold=None):
+def _cluster(embs, threshold, dim=settings.EMBEDDING_DIM):
     """Жадная кластеризация по косинусу, построчно (без матрицы n*n).
 
-    titles (опц.): пары в [DEDUP_LEXICAL_FLOOR, threshold) — семантически
-    близкие, но не обязательно один сюжет (см. DEDUP_LEXICAL_FLOOR) — мержим
-    только если делят >= _MIN_SHARED_TOKENS "редких" для батча токена
-    заголовка. Косинус >= threshold мержится безусловно.
-
-    bodies (опц.): эмбеддинги ТЕЛ, None у тех, где тело ещё не досчитано.
-    Считаются ОТДЕЛЬНОЙ матрицей, со СВОИМ порогом (DEDUP_BODY_COSINE, ниже
-    заголовочного — см. комментарий в settings) и объединяются по ИЛИ: тела
-    ловят дубли, которые заголовки роняют («India's Rs 4.78 Lakh Crore Energy
-    Storage Plan» и «47 GW battery storage, 23 GW pumped storage projects in
-    pipeline» — один документ, косинус тел 0.958, косинус заголовков 0.859).
-    Смешивать вектора заголовка и тела в ОДНОЙ матрице нельзя: это разные
-    пространства, косинус между ними ~0.8 даже у точного дубля, и дедуп
-    разваливается — тела досчитываются отдельной стадией. Строка без тела
-    получает нулевой вектор: её косинус ко всем 0, порога не достигает."""
+    embs: вектора ОДНОГО пространства — заголовочные либо телесные, но не
+    вперемешку: косинус между заголовком и телом одной и той же статьи ~0.8,
+    то есть на уровне шума между разными сюжетами, и дедуп разваливается.
+    None вместо вектора (тело ещё не досчитано) даёт нулевой вектор: косинус
+    ко всем 0, порога не достигает, строка остаётся отдельным сюжетом."""
     n = len(embs)
     if n == 0:
         return np.zeros(0, int)
-
-    def unit(vecs):
-        E = np.asarray(vecs, np.float32)
-        return E / (np.linalg.norm(E, axis=1, keepdims=True) + 1e-10)
-
-    E = unit(embs)
-    B = unit([b if b is not None else np.zeros(E.shape[1], np.float32)
-              for b in bodies]) if bodies is not None else None
-    b_th = settings.DEDUP_BODY_COSINE if body_threshold is None else body_threshold
-    lex = _distinctive_tokens(titles, exclude) if titles else None
+    E = np.asarray([e if e is not None else np.zeros(dim, np.float32)
+                    for e in embs], np.float32)
+    E = E / (np.linalg.norm(E, axis=1, keepdims=True) + 1e-10)
     labels = np.full(n, -1, int)
     nxt = 0
     for i in range(n):
         if labels[i] >= 0:
             continue
-        sims = E @ E[i]
-        match = sims >= threshold
-        if B is not None:
-            match = match | (B @ B[i] >= b_th)
-        if lex is not None and lex[i]:
-            floor_ok = sims >= settings.DEDUP_LEXICAL_FLOOR
-            shared = np.array([len(lex[i] & lex[j]) >= _MIN_SHARED_TOKENS for j in range(n)])
-            match = match | (floor_ok & shared)
-        labels[match & (labels < 0)] = nxt
+        match = (E @ E[i] >= threshold) & (labels < 0)
+        match[i] = True   # нулевой вектор не совпадает даже сам с собой:
+                          # без этого все строки без тела остались бы с меткой
+                          # -1, то есть слиплись бы в один сюжет
+        labels[match] = nxt
         nxt += 1
     return labels
 
@@ -150,10 +84,9 @@ def _mmr_select(candidates, n_pick, lam=None):
     кандидатов единицы-сотни, лишняя векторизация тут не нужна.
 
     Подстраховка сверху над _cluster: кросс-языковые дубли одного вирусного
-    сюжета (разные алфавиты — не делят лексических токенов, см.
-    _distinctive_tokens) не всегда мержатся в один кластер уже на этапе
-    кластеризации — MMR не даёт им занять большую часть TOP_N, штрафуя
-    кандидата за схожесть с уже отобранным."""
+    сюжета не всегда мержатся в один кластер уже на этапе кластеризации — MMR
+    не даёт им занять большую часть TOP_N, штрафуя кандидата за схожесть с уже
+    отобранным."""
     lam = settings.DIGEST_MMR_LAMBDA if lam is None else lam
     if not candidates:
         return []
@@ -199,25 +132,21 @@ def _pubdate(publish_date, fetched_at):
     return pd or fa or datetime.now(timezone.utc)
 
 
-def cluster_rows(rows, country):
+def cluster_rows(rows):
     """rows (14 колонок, см. _SELECT) -> {label: [строки сюжета]}.
 
     Общая для фида и витрины часть: одна и та же кластеризация должна давать
     одно и то же разбиение, иначе они показывают разные представители сюжета.
+
+    Дедуп ТОЛЬКО по телам. Заголовочный канал (0.95) и лексический мостик по
+    общим токенам заголовка отсюда убраны: на недельном окне (6452 статьи,
+    у всех есть тело) тела дают 34033 слияния, заголовки добавляют к ним 33 —
+    0.09 %, и все 33 сидят на косинусе тел 0.89-0.91, то есть у самого порога.
+    Мостик же был откровенно вреден: он склеивал разные сюжеты по паре общих
+    слов, а склейка прячет статью из фида целиком.
     """
-    embs = [np.frombuffer(r[6], np.float32) for r in rows]
-    # Тела — вторым сигналом, со своим порогом DEDUP_BODY_COSINE: совпадение
-    # МАРГИНАЛЬНЫХ распределений косинусов (медиана 0.806 против 0.800) ещё не
-    # значит, что порог годится один — важно, как канал разводит дубли и разные
-    # сюжеты, а тела разводят их лучше заголовков (см. settings).
     bodies = [np.frombuffer(r[10], np.float32) if r[10] else None for r in rows]
-    # title_en, если уже закэширован с прошлого прогона (см. translate.py) —
-    # мостит кросс-языковые дубли, которых сырой заголовок мостить не может
-    # (разные алфавиты не делят токенов); сходится за пару часовых прогонов.
-    titles = [r[8] or r[1] for r in rows]
-    exclude = _TOKEN_RE.split(settings.country_display(country).lower())
-    labels = _cluster(embs, settings.DEDUP_COSINE, titles=titles, exclude=exclude,
-                      bodies=bodies)
+    labels = _cluster(bodies, settings.DEDUP_BODY_COSINE)
     groups = {}
     for row, lab in zip(rows, labels):
         groups.setdefault(int(lab), []).append(row)
@@ -244,14 +173,15 @@ def rank(groups):
     return sorted(zip(labels, scores), key=lambda kv: kv[1], reverse=True)
 
 
-def _top_items(rows, country):
+def _top_items(rows):
     """-> представители сюжетов по убыванию структурной важности (без
     TOP_N/MMR-лимита — это фид «все статьи»)."""
     if not rows:
         return []
-    groups = cluster_rows(rows, country)
+    groups = cluster_rows(rows)
     # Представитель — самый важный по оценке… которой больше нет. Берём самый
-    # свежий: внутри кластера это один и тот же сюжет (косинус >= DEDUP_COSINE).
+    # свежий: внутри кластера это один и тот же сюжет (косинус тел >=
+    # DEDUP_BODY_COSINE).
     return [max(groups[lab], key=lambda r: r[4] or "") for lab, _s in rank(groups)]
 
 
@@ -275,7 +205,7 @@ def build_country(conn, country):
     rows = conn.execute(
         _SELECT + "WHERE country=? AND importance>? AND fetched_at>=?",
         (country, settings.RELEVANCE_CUTOFF, since)).fetchall()
-    items = _top_items(rows, country)
+    items = _top_items(rows)
     # переводим всё, что попало в фид (после дедупа, без лимита) — не весь
     # оценённый бэклог, см. translate.py.
     translated = translate.translate_missing(

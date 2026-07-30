@@ -327,10 +327,20 @@ def test_score_batches_across_countries_in_one_request():
     assert set(got.values()) == {settings.RELEVANT_SCORE}, got
 
 
-def _feed_row(url, title, vec, fetched, entities_cell="", t_ru=None, x_ru=None):
-    """Строка в форме feeds._SELECT (14 колонок)."""
+_NO_BODY = object()
+
+
+def _feed_row(url, title, vec, fetched, entities_cell="", t_ru=None, x_ru=None,
+              body=None):
+    """Строка в форме feeds._SELECT (14 колонок).
+
+    body по умолчанию равно vec: фид кластеризует ТОЛЬКО по телам
+    (feeds.cluster_rows), и строка с пустым r[10] стала бы отдельным сюжетом.
+    _NO_BODY — явная «тело ещё не досчитано»."""
+    b = vec if body is None else body
     return (url, title, "t", None, fetched, settings.RELEVANT_SCORE, vec.tobytes(),
-            "en", None, None, None, entities_cell, t_ru, x_ru)
+            "en", None, None, None if b is _NO_BODY else b.tobytes(),
+            entities_cell, t_ru, x_ru)
 
 
 def test_cluster_dedups_and_ranks_by_coverage():
@@ -352,7 +362,7 @@ def test_cluster_dedups_and_ranks_by_coverage():
         _feed_row("http://b3.com/x", "wide",    v_b, "2026-07-20T11:00:00"),
         _feed_row("http://c.com/x", "narrow",   v_c, "2026-07-20T11:00:00"),
     ]
-    top = feeds._top_items(rows, "india")
+    top = feeds._top_items(rows)
     urls = [r[0] for r in top]
     assert len(top) == 3, f"три сюжета после дедупа, без лимита: {urls}"
     assert "http://a.com/2" in urls and "http://a.com/1" not in urls, \
@@ -370,132 +380,79 @@ def _vec_at_cosine(cos, dim=settings.EMBEDDING_DIM, seed=0):
     return (cos * v + np.sqrt(1 - cos**2) * orth).astype(np.float32)
 
 
-def test_cluster_lexical_confirm_merges_below_dedup_cosine():
-    """Реальный кейс с калибровки: разные издания об одном сюжете (Bhargavastra)
-    дают e5-косинус ~0.86-0.93 — ниже DEDUP_COSINE=0.95, но общие "редкие"
-    токены заголовка (bhargavastra, swarm, counter...) подтверждают один
-    сюжет выше DEDUP_LEXICAL_FLOOR."""
-    titles = [
-        "Solar Defence and Aerospace Ltd demonstrates indigenous 'Bhargavastra' counter-swarm drone system",
-        "Bhargavastra: India's Indigenous Counter-Swarm Drone System",
-        "India's turbojet breakthrough: 1st indigenous engine to power future missiles",
-    ]
-    embs = [
-        _vec_at_cosine(1.0, seed=1),
-        _vec_at_cosine(0.88, seed=1),   # тот же сюжет, разное издание (ниже 0.95)
-        _vec_at_cosine(0.85, seed=2),   # другой сюжет, но семантически близкий (та же тема/страна)
-    ]
-    labels = feeds._cluster(embs, settings.DEDUP_COSINE, titles=titles)
-    assert labels[0] == labels[1], "дубль одного сюжета должен схлопнуться по общим токенам"
-    assert labels[2] != labels[0], "другой сюжет не должен слиться по одному лишь высокому косинусу"
-
-
-def test_cluster_lexical_cutoff_scales_with_batch_size():
-    """Регресс на баг из прод-инцидента 2026-07-25: вирусный сюжет (~90 из
-    300 статей об одной новости на разных языках) — общая для дубликатов
-    лексика (resigns, minister...) при старом fixed-6 потолке DF-cutoff
-    ошибочно считалась "общей для батча" и переставала бриджевать дубли.
-    Здесь батч намеренно большой (30), чтобы старый cutoff=6 не пропустил
-    токен, встречающийся в 12 из 30 заголовков."""
-    n_total, n_dup = 100, 20  # дубль в 20% батча: старый fixed-6 потолок это не тянет
-    titles = [f"Minister resigns amid nationwide protests report {i}" for i in range(n_dup)]
-    titles += [f"unrelated filler headline number {i}" for i in range(n_total - n_dup)]
-    # все дубли в одной подплоскости (seed=1), как и "корень" (cos=1.0) — их
-    # косинус ДРУГ К ДРУГУ через корень контролируем через cos, в отличие от
-    # филлера (другой seed => ~ортогонален корню).
-    embs = [_vec_at_cosine(1.0 if i == 0 else 0.85, seed=1) for i in range(n_dup)]
-    embs += [_vec_at_cosine(0.05, seed=200 + i) for i in range(n_total - n_dup)]
-    labels = feeds._cluster(embs, settings.DEDUP_COSINE, titles=titles)
-    assert len(set(labels[:n_dup].tolist())) == 1, \
-        "дубли одного вирусного сюжета должны схлопнуться даже в большом батче"
-
-
-def test_cluster_excludes_country_token_from_lexical_bridge():
-    """Без exclude двум НЕсвязанным статьям об Индии достаточно случайно
-    разделить "india" + один общий глагол, чтобы ложно слиться в один
-    кластер (прод-баг: NavIC история слилась с историей про протесты
-    только по "india"+"sparked")."""
-    titles = [
-        "How 1999 Kargil GPS denial sparked India NavIC system",
-        "Exam scandal in India sparked a student uprising",
-    ]
-    embs = [_vec_at_cosine(1.0, seed=1), _vec_at_cosine(0.83, seed=1)]
-    exclude = feeds._TOKEN_RE.split("india")
-    labels = feeds._cluster(embs, settings.DEDUP_COSINE, titles=titles, exclude=exclude)
-    assert labels[0] != labels[1], "общие 'india'+'sparked' не должны в одиночку сливать разные сюжеты"
-
-
-def test_cluster_lexical_bridge_ignores_two_generic_tokens():
-    """Прод-баг (фид Саудовской Аравии, 30.07): сделка по авиации Bombardier
-    попала в кластер ядерной сделки США — Саудовской Аравии, потому что
-    заголовки делили 'deal' и 'into'. Косинус тел у этой пары 0.818 — разные
-    сюжеты, — но старого порога в 2 общих токена хватало.
-
-    Ложное слияние дороже пропущенного: пропущенное показывает дубль, ложное
-    прячет статью из фида совсем."""
-    titles = [
-        "The US-Saudi nuclear deal isn't dead - it's dragging Washington into quicksand",
-        "Saudi Arabia's THC expands into business aviation with Bombardier deal",
-        "Trump administration revives talks on the Saudi nuclear deal framework",
-    ]
-    embs = [_vec_at_cosine(1.0, seed=1),
-            _vec_at_cosine(0.85, seed=1),   # выше DEDUP_LEXICAL_FLOOR, ниже 0.95
-            _vec_at_cosine(0.86, seed=1)]
-    exclude = feeds._TOKEN_RE.split("saudi arabia")
-    labels = feeds._cluster(embs, settings.DEDUP_COSINE, titles=titles, exclude=exclude)
-    assert labels[0] != labels[1], "'deal'+'into' — не подтверждение одного сюжета"
-
-
-def test_cluster_bodies_merge_what_titles_miss():
-    """Тела — второй сигнал по ИЛИ, а не замена заголовочному.
+def test_feed_clusters_by_bodies_not_titles():
+    """Фид дедуплицирует ТОЛЬКО по телам, на своём пороге DEDUP_BODY_COSINE.
 
     Прод-случай: «India's Rs 4.78 Lakh Crore Energy Storage Plan» и «47 GW
     battery storage, 23 GW pumped storage projects in pipeline» — один
-    документ, косинус тел 0.958, заголовков 0.859.
+    документ, косинус тел 0.958, заголовков 0.859. Обратный прод-случай: сделка
+    Bombardier и ядерная сделка США — Саудовская Аравия делят слова заголовка,
+    но косинус тел у них 0.818 — разные сюжеты.
 
-    Заодно регресс на смешивание пространств: у трети статей тела ещё не
-    досчитаны (bodies[i] is None). Их нулевой вектор обязан НЕ сливаться ни с
-    кем — иначе все статьи без тела схлопнулись бы в один сюжет."""
-    embs = [_vec_at_cosine(1.0, seed=1),      # заголовки далеко друг от друга
-            _vec_at_cosine(0.70, seed=1),
-            _vec_at_cosine(0.70, seed=2)]
+    Заголовочный канал убран не «за компанию»: на недельном окне он добавлял к
+    34033 слияниям по телам ровно 33 своих. Проверяем, что заголовки больше не
+    решают ничего — ни слить, ни развести."""
     same_body = _vec_at_cosine(1.0, seed=9)
-    bodies = [same_body, same_body, None]     # у третьей тело не досчитано
+    far_titles = [_vec_at_cosine(1.0, seed=1), _vec_at_cosine(0.70, seed=1)]
+    rows = [_feed_row("http://a/1", "Energy Storage Plan", far_titles[0], "2026-07-20T10:00:00",
+                      body=same_body),
+            _feed_row("http://b/1", "47 GW battery storage", far_titles[1], "2026-07-20T11:00:00",
+                      body=same_body)]
+    assert len(feeds.cluster_rows(rows)) == 1, "совпавшие тела обязаны слить сюжет"
 
-    plain = feeds._cluster(embs, settings.DEDUP_COSINE)
-    assert plain[0] != plain[1], "предпосылка теста: по заголовкам это разные сюжеты"
-
-    labels = feeds._cluster(embs, settings.DEDUP_COSINE, bodies=bodies)
-    assert labels[0] == labels[1], "совпавшие тела обязаны слить сюжет"
-    assert labels[2] != labels[0], "статья без тела не должна липнуть к чужому сюжету"
-
-    # Две статьи БЕЗ тел: оба нулевых вектора дают косинус 0 и слиться не могут.
-    solo = feeds._cluster([_vec_at_cosine(1.0, seed=1), _vec_at_cosine(0.70, seed=2)],
-                          settings.DEDUP_COSINE, bodies=[None, None])
-    assert solo[0] != solo[1], "нулевые вектора не должны сливать статьи без тел"
+    # Заголовки-близнецы (косинус 1.0) при далёких телах — два разных сюжета.
+    one_title = _vec_at_cosine(1.0, seed=1)
+    rows = [_feed_row("http://a/2", "Saudi deal", one_title, "2026-07-20T10:00:00",
+                      body=_vec_at_cosine(1.0, seed=9)),
+            _feed_row("http://b/2", "Saudi deal", one_title, "2026-07-20T11:00:00",
+                      body=_vec_at_cosine(0.82, seed=9))]
+    assert len(feeds.cluster_rows(rows)) == 2, "тела 0.82 — разные сюжеты, заголовки не в счёт"
 
 
-def test_body_threshold_is_lower_than_title_threshold():
-    """У тел СВОЙ порог, ниже заголовочного (DEDUP_BODY_COSINE).
+def test_feed_body_threshold_boundaries():
+    """Границы DEDUP_BODY_COSINE: 0.92 сливает, 0.88 — нет.
 
-    Прод-случай: ядерная сделка США — Саудовская Аравия (28.07) разъехалась на
-    7 позиций фида при косинусах тел 0.816..0.939 — до общего 0.95 не доходила
-    ни одна пара, канал тел молчал целиком. Тела разделяют сюжеты лучше
-    заголовков (внутри сюжета p10 = 0.870 против p90 = 0.851 между сюжетами),
-    так что порог им нужен ниже, а не тот же.
-
-    Проверяем обе границы: 0.92 (между body- и title-порогом) обязан слить,
-    0.88 — нет, иначе порог сполз бы в шум."""
+    Порог ниже заголовочного намеренно: тела разделяют сюжеты лучше (внутри
+    сюжета p10 = 0.870 против p90 = 0.851 между сюжетами). Прежний общий 0.95
+    глушил канал целиком — p99 косинусов тел всего 0.874."""
     assert settings.DEDUP_BODY_COSINE < settings.DEDUP_COSINE
-    far = [_vec_at_cosine(1.0, seed=1), _vec_at_cosine(0.70, seed=1)]  # заголовки врозь
+    root = _vec_at_cosine(1.0, seed=9)
 
-    near = feeds._cluster(far, settings.DEDUP_COSINE,
-                          bodies=[_vec_at_cosine(1.0, seed=9), _vec_at_cosine(0.92, seed=9)])
-    assert near[0] == near[1], "косинус тел 0.92 — один сюжет, обязан слиться"
+    def n_clusters(cos):
+        rows = [_feed_row("http://a/x", "t", root, "2026-07-20T10:00:00", body=root),
+                _feed_row("http://b/x", "t", root, "2026-07-20T11:00:00",
+                          body=_vec_at_cosine(cos, seed=9))]
+        return len(feeds.cluster_rows(rows))
 
-    apart = feeds._cluster(far, settings.DEDUP_COSINE,
-                           bodies=[_vec_at_cosine(1.0, seed=9), _vec_at_cosine(0.88, seed=9)])
-    assert apart[0] != apart[1], "косинус тел 0.88 ниже порога — сливать нельзя"
+    assert n_clusters(0.92) == 1, "косинус тел 0.92 — один сюжет, обязан слиться"
+    assert n_clusters(0.88) == 2, "косинус тел 0.88 ниже порога — сливать нельзя"
+
+
+def test_feed_rows_without_body_stay_separate():
+    """Тело считается стадией позже (embed_bodies) и только у принятых, так что
+    в окно попадают строки с пустым r[10]. Их нулевой вектор даёт косинус 0 ко
+    всем — каждая обязана остаться отдельным сюжетом. Иначе все недосчитанные
+    схлопнулись бы в один."""
+    v = _vec_at_cosine(1.0, seed=1)
+    rows = [_feed_row("http://a/n", "t", v, "2026-07-20T10:00:00", body=_NO_BODY),
+            _feed_row("http://b/n", "t", v, "2026-07-20T11:00:00", body=_NO_BODY),
+            _feed_row("http://c/n", "t", v, "2026-07-20T12:00:00", body=v)]
+    assert len(feeds.cluster_rows(rows)) == 3, "нулевые вектора не должны сливать статьи"
+
+
+def test_scoring_still_clusters_by_titles():
+    """До гейта тел ещё нет — там дедуп по заголовкам, и это осознанно.
+
+    Считать эмбеддинг тела для четырёх отказов из пяти на машине без AVX
+    дороже, чем изредка спросить LLM про сюжет дважды. Недомерженное здесь
+    схлопнется в фиде, где тела уже посчитаны."""
+    v = _vec_at_cosine(1.0, seed=1)
+    rows = [("http://a/s", "Same story", "text", v.tobytes()),
+            ("http://b/s", "Same story", "text", _vec_at_cosine(0.97, seed=1).tobytes()),
+            ("http://c/s", "Other story", "text", _vec_at_cosine(0.40, seed=2).tobytes())]
+    items, groups = pipeline._group_for_scoring(rows)
+    assert len(items) == 2, f"дубль заголовков — один вопрос к LLM: {items}"
+    assert sorted(len(g) for g in groups.values()) == [1, 2]
 
 
 def test_build_country_writes_xml():

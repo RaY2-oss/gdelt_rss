@@ -17,7 +17,7 @@
       <a class="rmap__land" href="/c/{{ d.key }}.html" data-tier="{{ d.tier }}"
          style="--i: {{ loop.index0 }}" data-cty="{{ d.name }}"
          data-n="{{ d.n }} {{ d.n|plural('сюжет','сюжета','сюжетов') }}{% if d.n %} · важность верхнего {{ d.score }}{% endif %}"
-         data-ttl="{{ d.title if d.n else 'за неделю тихо' }}">
+         data-ttl="{{ d.title if d.n else 'за ' ~ period_acc ~ ' тихо' }}">
         <title>{{ d.name }}: {{ d.n }} {{ d.n|plural('сюжет','сюжета','сюжетов') }}</title>
         {% if d.d %}<path d="{{ d.d }}"></path>
         {% else %}<circle cx="{{ d.x }}" cy="{{ d.y }}" r="7"></circle>{% endif %}
