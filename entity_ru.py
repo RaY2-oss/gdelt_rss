@@ -57,6 +57,12 @@ def _ensure(conn):
                  "name TEXT PRIMARY KEY, ru TEXT NOT NULL, src TEXT)")
 
 
+def _latin(name):
+    """Как показывать имя, оставшееся латиницей. Из GKG оно приходит в нижнем
+    регистре, и «bloomberg» посреди русской строки читается как опечатка."""
+    return name if _CYR.search(name) else name.title()
+
+
 def _from_glossary(name):
     """Русская форма из словаря — только если словарь покрывает имя целиком."""
     key = glossary._norm(name)
@@ -64,16 +70,24 @@ def _from_glossary(name):
         return None
     for _s, _e, hit, repl, mode in glossary.find_all(name):
         if hit == key:
-            return name if mode == "keep" else repl
+            # keep — это «не кириллицей», а не «как пришло»: в словаре у такой
+            # строки лежит каноническое латинское написание (NASDAQ, NVIDIA),
+            # и оно лучше и нижнего регистра из GKG, и своего .title().
+            return repl or name
     return None
+
+
+# «Не ответил» и «ответил латиницей» — разные вещи, и путать их дорого: ответ
+# кэшируется навсегда, поэтому сорванный запрос кэшировать нельзя.
+_FAILED = object()
 
 
 def _google(name):
     try:
-        return _clean(GoogleTranslator(source="en", target="ru").translate(name)) or None
+        return _clean(GoogleTranslator(source="en", target="ru").translate(name)) or ""
     except Exception as exc:
         log.debug("entity_ru: Google не ответил на %r: %s", name, exc)
-        return None
+        return _FAILED
 
 
 def translate_names(conn, names):
@@ -107,12 +121,12 @@ def translate_names(conn, names):
     for name in unresolved:
         ru = cached.get(name.lower())
         if ru:
-            out[name] = ru
+            out[name] = _latin(ru)
         elif _spent < BUDGET:
             _spent += 1
             todo.append(name)
         else:
-            out[name] = name
+            out[name] = _latin(name)
 
     if todo:
         # Title Case важен: Google распознаёт имя собственное по регистру и на
@@ -121,15 +135,24 @@ def translate_names(conn, names):
             got = list(pool.map(lambda n: _google(n.title()), todo))
         rows = []
         for name, ru in zip(todo, got):
+            if ru is _FAILED:
+                # Сорванный запрос в кэш не идёт. Иначе один неудачный прогон —
+                # или потолок запросов на той стороне при разборе накопленного
+                # списка — оставлял бы имя латиницей навсегда, и следующий
+                # прогон даже не пробовал бы: в кэше ведь «ответ».
+                out[name] = _latin(name)
+                continue
             # Ответ без кириллицы = бренд, который Google оставил латиницей.
             # Кэшируем и его, но показываем оригинал, а не выхлоп переводчика.
-            keep = not ru or not _CYR.search(ru)
-            out[name] = name if keep else ru
+            keep = not _CYR.search(ru)
+            out[name] = _latin(name) if keep else ru
             rows.append((name.lower(), out[name], "keep" if keep else "google"))
-        conn.executemany(
-            "INSERT OR REPLACE INTO entity_ru (name, ru, src) VALUES (?,?,?)", rows)
-        conn.commit()
-        log.info("entity_ru: переведено %d имён, всего за сборку %d", len(rows), _spent)
+        if rows:
+            conn.executemany(
+                "INSERT OR REPLACE INTO entity_ru (name, ru, src) VALUES (?,?,?)", rows)
+            conn.commit()
+        log.info("entity_ru: переведено %d имён из %d спрошенных, всего за сборку %d",
+                 len(rows), len(todo), _spent)
     return out
 
 
@@ -137,22 +160,41 @@ def _selfcheck():
     """Проверяем ровно то, что может разъехаться молча: словарь бьётся по целой
     фразе, режим keep оставляет латиницу, ответ без кириллицы не показывается."""
     assert _from_glossary("narendra modi") == "Нарендра Моди"
-    assert _from_glossary("samsung") == "samsung"          # keep — латиница
+    assert _from_glossary("nasdaq") == "NASDAQ"             # keep — но написание из словаря
     assert _from_glossary("ministry of education") is None  # частичное — не берём
     assert _from_glossary("") is None
     assert _clean("Сонам ​​Вангчук") == "Сонам Вангчук"
+    assert _latin("whatsapp linkedin") == "Whatsapp Linkedin"
+    assert _latin("Министерство образования") == "Министерство образования"
 
     import sqlite3
     conn = sqlite3.connect(":memory:")
-    # Google не зовём: имя есть в кэше, а второе имя упирается в потолок.
+    # Google не зовём: имена есть в кэше, а последнее упирается в потолок.
     _ensure(conn)
-    conn.execute("INSERT INTO entity_ru (name, ru, src) VALUES ('dhaka university','Университет Дакки','google')")
+    conn.executemany("INSERT INTO entity_ru (name, ru, src) VALUES (?,?,?)", [
+        ("dhaka university", "Университет Дакки", "google"),
+        ("hexnode", "hexnode", "keep"),
+    ])
     global _spent
     _spent = BUDGET
-    got = translate_names(conn, ["Dhaka University", "Sanae Takaichi", "Samsung"])
+    got = translate_names(conn, ["Dhaka University", "Hexnode", "Sanae Takaichi", "Samsung"])
     assert got["Dhaka University"] == "Университет Дакки", got
+    assert got["Hexnode"] == "Hexnode", got                # латиница из кэша — не нижним регистром
     assert got["Sanae Takaichi"] == "Sanae Takaichi", got   # бюджет исчерпан — латиница
     assert got["Samsung"] == "Samsung", got
+
+    # Сорванный запрос показываем латиницей, но в кэш не пишем — иначе имя
+    # останется латиницей навсегда.
+    global _google
+    real, _google = _google, lambda n: _FAILED
+    try:
+        reset_budget()
+        got = translate_names(conn, ["Sanae Takaichi"])
+        assert got["Sanae Takaichi"] == "Sanae Takaichi", got
+        assert not conn.execute(
+            "SELECT 1 FROM entity_ru WHERE name = 'sanae takaichi'").fetchone()
+    finally:
+        _google = real
     reset_budget()
     print("entity_ru selfcheck ok")
 

@@ -17,6 +17,49 @@
     var t = localStorage.getItem('theme');
     if (t) document.documentElement.dataset.theme = t;
   } catch (e) {}
+
+  // Направление перехода между страницами. Здесь, в head, а не в app.js:
+  // pagereveal случается ДО первой отрисовки нового документа, то есть раньше,
+  // чем запускается отложенный (defer) скрипт, — слушатель в app.js его просто
+  // не заставал. Отсюда и «на ПК переходов не видно»: data-nav на приходящем
+  // документе не вставал, направления у перехода не было, и браузер сшивал
+  // страницы растворением. На двух страницах с одной шапкой и одной сеткой
+  // растворение неотличимо от подмены кадра.
+  // Витрина — три уровня глубины: главная, регион, страна. Вглубь страница
+  // приходит справа, наружу — слева (keyframes pg-* в style.css).
+  (function () {
+    var root = document.documentElement;
+    var depth = function (path) {
+      return path.indexOf('/c/') === 0 ? 2 : path.indexOf('/r/') === 0 ? 1 : 0;
+    };
+    // Уход: адрес назначения известен только здесь. Направление ставится на
+    // уходящий документ — с него берётся снимок для ::view-transition-old.
+    addEventListener('pageswap', function (e) {
+      if (!e.viewTransition) return;
+      var to = e.activation && e.activation.entry && e.activation.entry.url;
+      if (to) root.dataset.nav =
+        depth(new URL(to).pathname) >= depth(location.pathname) ? 'in' : 'out';
+    });
+    // Приход: новый документ о предыдущем знает только из e.activation.from.
+    // «Назад» — всегда наружу, откуда бы ни возвращались: у кнопки своё
+    // направление, и оно сильнее глубины адресов.
+    addEventListener('pagereveal', function (e) {
+      var nav = performance.getEntriesByType('navigation')[0];
+      if (nav && nav.type === 'back_forward') { root.dataset.nav = 'out'; return; }
+      var from = e.activation && e.activation.from && e.activation.from.url;
+      root.dataset.nav = from &&
+        depth(new URL(from).pathname) > depth(location.pathname) ? 'out' : 'in';
+    });
+  })();
+</script>
+
+{# Страница подтягивается по наведению и на нажатии, за 100–200 мс до самого
+   перехода: у витрины страница страны весит до мегабайта, и переход между
+   документами всё это время держит уходящий кадр замёрзшим — именно это и
+   читалось как «переход лагает». Prefetch, а не prerender: prerender строит
+   документ целиком, и на телефоне это дороже самой задержки. #}
+<script type="speculationrules">
+{"prefetch": [{"where": {"href_matches": "/*"}, "eagerness": "moderate"}]}
 </script>
 </head>
 <body{% if home %} data-home{% endif %}{% if current_region %} data-region="{{ current_region }}"{% endif %}{% if current_country %} data-country="{{ current_country }}"{% endif %}>
