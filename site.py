@@ -446,7 +446,10 @@ def stories(conn, rows, country, now):
             "day": dt.strftime("%Y-%m-%d"),
             "ago": _ago(dt, now),
             "domain": sources[0]["domain"] if sources else "",
-            "sources": sources[:8],
+            # Все издания кластера, а не первые восемь: в строке выходных данных
+            # стоит их полное число («24 издания»), и «Ещё 7 источников» под ним
+            # читалось как противоречие — список молча обрывался на восьмом.
+            "sources": sources,
             "outlets": len(sources),
             "outlets_word": _plural(len(sources), "издание", "издания", "изданий"),
             "entities": [e for e in (ents or "").split(";") if e][:4],

@@ -50,6 +50,29 @@
       root.dataset.nav = from &&
         depth(new URL(from).pathname) > depth(location.pathname) ? 'out' : 'in';
     });
+
+    // А теперь про тех, у кого кроссдокументного перехода нет вовсе (Firefox,
+    // Safari до 18.2) или у кого мы его сами выключили — на телефоне, см.
+    // @media (hover: none) в style.css. Раньше у них перелистывания не было
+    // никакого: pageswap/pagereveal не случаются, браузер меняет документ
+    // встык, и весь слой движения сводился к подмене кадра. Теперь приход
+    // страницы рисует обычная CSS-анимация поля (html.no-vt #main) — то же
+    // движение и в ту же сторону, только без снимков и без заморозки.
+    if (!('onpageswap' in window) || matchMedia('(hover: none)').matches) {
+      root.classList.add('no-vt');
+      // Направление тут неоткуда взять на приходе: pagereveal нет, а
+      // document.referrer у перехода внутри сайта врёт при переоткрытии
+      // вкладки. Глубину, с которой ушли, страница оставляет себе сама.
+      var back = (performance.getEntriesByType('navigation')[0] || {}).type
+        === 'back_forward';
+      var was = null;
+      try { was = sessionStorage.getItem('depth'); } catch (e) {}
+      root.dataset.nav =
+        back || (was !== null && +was > depth(location.pathname)) ? 'out' : 'in';
+      addEventListener('pagehide', function () {
+        try { sessionStorage.setItem('depth', depth(location.pathname)); } catch (e) {}
+      });
+    }
   })();
 </script>
 
