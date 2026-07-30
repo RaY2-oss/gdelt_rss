@@ -366,6 +366,7 @@ a { color: inherit; }
 }
 
 .theme {
+  position: relative;
   flex: none;
   width: 2rem;
   height: 2rem;
@@ -376,9 +377,23 @@ a { color: inherit; }
   border: 1px solid var(--console-rule);
   border-radius: var(--r);
   cursor: pointer;
-  transition: border-color 0.12s;
+  /* Палец бьёт по 32 px у самого края экрана мимо; промах по кнопке темы
+     неотличим от сломанной кнопки. Область нажатия дотягивается до 44 px, не
+     раздувая саму кнопку: расширение уходит в зазор шапки, соседей не задевая.
+     manipulation снимает двойным нажатием масштабирование, а с ним и ожидание
+     второго нажатия перед click. */
+  touch-action: manipulation;
+  transition: border-color 0.12s, transform 0.12s;
+}
+.theme::before {
+  content: '';
+  position: absolute;
+  inset: -0.4375rem;    /* 30 px поля кнопки + 2×7 = 44 */
 }
 .theme:hover { border-color: var(--beam); }
+/* Смена гаммы отвечает не сразу — сперва снимается снимок кадра. Нажатие
+   должно быть видно сразу, иначе его повторяют, и тема возвращается назад. */
+.theme:active { border-color: var(--beam); transform: scale(0.9); }
 .theme__dot {
   width: 11px;
   height: 11px;
@@ -2357,6 +2372,11 @@ html.is-theming::view-transition-new(root) {
      луча. Пульс остаётся пульсом, только теперь в тень, а не в свет. */
   .rmap__field.is-sweep .rmap__land path,
   .rmap__field.is-sweep .rmap__land circle { animation-name: ping-dim; }
+
+  /* Круг новой гаммы идёт короче: до его начала браузер снимает снимок кадра, и
+     на телефоне это само по себе заметная пауза. Полсекунды ожидания плюс
+     0.62 с круга читаются как «кнопка думает», а не как перелив. */
+  html.is-theming::view-transition-new(root) { animation-duration: 0.42s; }
 }
 @keyframes ping-dim {
   0%, 100% { opacity: 1; }
