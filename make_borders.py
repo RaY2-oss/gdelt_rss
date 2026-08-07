@@ -184,11 +184,92 @@ def ring_to_path(ring, frame, w, h, keep=1.0):
     return "".join(out) + "z"
 
 
-def shape(feature, frame, w, h):
+def outlines(feature):
+    """Внешние кольца всех кусков фигуры. Дырки не берём: единственная на всю
+    выборку — Лесото внутри ЮАР, и ради неё городить вычитание не стоит."""
     geom = feature["geometry"]
-    rings = ([geom["coordinates"]] if geom["type"] == "Polygon"
+    polys = ([geom["coordinates"]] if geom["type"] == "Polygon"
              else geom["coordinates"])
-    return "".join(ring_to_path(r[0], frame, w, h) for r in rings)
+    return [p[0] for p in polys]
+
+
+def shape(feature, frame, w, h):
+    return "".join(ring_to_path(r, frame, w, h) for r in outlines(feature))
+
+
+# ── Место для подписи ─────────────────────────────────────────────────────
+def _inside(px, py, poly):
+    """Луч вправо: нечётное число пересечений — точка внутри."""
+    hit = False
+    for i in range(len(poly)):
+        (ax, ay), (bx, by) = poly[i - 1], poly[i]
+        if (ay > py) != (by > py) and px < ax + (py - ay) / (by - ay) * (bx - ax):
+            hit = not hit
+    return hit
+
+
+def _edge_dist(px, py, poly):
+    """Расстояние до ближайшего ребра — сколько места вокруг точки."""
+    best = float("inf")
+    for i in range(len(poly)):
+        (ax, ay), (bx, by) = poly[i - 1], poly[i]
+        dx, dy = bx - ax, by - ay
+        n = dx * dx + dy * dy
+        t = 0.0 if n == 0 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / n))
+        best = min(best, math.hypot(px - ax - t * dx, py - ay - t * dy))
+    return best
+
+
+def label_spot(feature, frame, w, h):
+    """Куда ставить имя страны: центр самого большого круга, влезающего внутрь.
+
+    Не центр тяжести и не центр рамки: у Вьетнама и Сомали фигура вогнутая, и
+    оба центра приходятся на соседа, а у Индонезии — на море. Круг ищем
+    перебором по сетке с двумя уточнениями вокруг лучшей точки. Способ грубый,
+    зато скрипт офлайновый и гоняется раз в год: сто тысяч проверок точки
+    дешевле, чем очередь с приоритетом ради тех же координат.
+
+    Возвращает (x, y, r) в координатах кадра, r — радиус этого круга. Ради него
+    всё и затевалось: подписи разных стран лежат в непересекающихся кругах
+    внутри непересекающихся фигур, поэтому наехать друг на друга не могут, и
+    разбирать столкновения не приходится.
+    """
+    best = None
+    for ring in outlines(feature):
+        lons = [p[0] for p in ring]
+        if max(lons) - min(lons) > 180:
+            continue
+        poly = clip([project(lon, lat, frame) for lon, lat in ring], w, h)
+        if len(poly) < 3:
+            continue
+        area = abs(sum(poly[i][0] * poly[i - 1][1] - poly[i - 1][0] * poly[i][1]
+                       for i in range(len(poly)))) / 2
+        if best is None or area > best[0]:
+            best = (area, poly)
+    if best is None:
+        return None
+
+    poly = best[1]
+    xs = [p[0] for p in poly]
+    ys = [p[1] for p in poly]
+    lo_x, hi_x, lo_y, hi_y = min(xs), max(xs), min(ys), max(ys)
+    spot = None
+    for _ in range(3):
+        sx = (hi_x - lo_x) / 12 or 1.0
+        sy = (hi_y - lo_y) / 12 or 1.0
+        for i in range(13):
+            for j in range(13):
+                px, py = lo_x + i * sx, lo_y + j * sy
+                if not _inside(px, py, poly):
+                    continue
+                r = _edge_dist(px, py, poly)
+                if spot is None or r > spot[2]:
+                    spot = (px, py, r)
+        if spot is None:
+            return None
+        lo_x, hi_x = spot[0] - sx, spot[0] + sx
+        lo_y, hi_y = spot[1] - sy, spot[1] + sy
+    return (round(spot[0]), round(spot[1]), round(spot[2]))
 
 
 def graticule(box, frame, w, h):
@@ -229,13 +310,16 @@ def main():
             if f["properties"].get(k):
                 by_name.setdefault(f["properties"][k], f)
 
-    paths, missing = {}, []
+    paths, spots, missing = {}, {}, []
     for key in settings.COUNTRIES:
         name = ALIAS.get(key) or key.replace("_", " ").title()
         f = by_name.get(name)
         d = shape(f, frame, MAP_W, h) if f else ""
         if d:
             paths[key] = d
+            spot = label_spot(f, frame, MAP_W, h)
+            if spot:
+                spots[key] = list(spot)
         else:
             missing.append(key)
     assert set(missing) == set(DOTS), (
@@ -268,6 +352,8 @@ def main():
         "w": MAP_W,
         "h": h,
         "paths": paths,
+        # куда и каким кеглем ложится имя страны — см. label_spot
+        "spots": spots,
         "rest": "".join(rest),
         "grid": graticule(GEO_BOX, frame, MAP_W, h),
         "dots": {k: [round(v) for v in project(lon, lat, frame)]
@@ -329,6 +415,20 @@ def _selfcheck():
     # кольцо через 180-й меридиан не должно развернуться во всю карту
     assert ring_to_path([(179, 60), (-179, 60), (-179, 61), (179, 61)],
                         frame, w, h) == ""
+
+    # Место под подпись. Ради вогнутых фигур всё и написано, поэтому проверяем
+    # на «уголке»: его центр тяжести лежит в вырезе, снаружи страны, и подпись
+    # оттуда уехала бы на соседа. Настоящее место — в середине толстой полки.
+    ell = [(0.0, 0.0), (30.0, 0.0), (30.0, 10.0), (10.0, 10.0),
+           (10.0, 40.0), (0.0, 40.0)]
+    x, y, r = label_spot({"geometry": {"type": "Polygon",
+                                       "coordinates": [ell + [ell[0]]]}},
+                         frame, w, h)
+    poly = clip([project(lo, la, frame) for lo, la in ell], w, h)
+    assert _inside(x, y, poly), "подпись легла вне фигуры: %r" % ((x, y),)
+    assert _edge_dist(x, y, poly) >= r - 1, "круг подписи вылезает за край"
+    # и он действительно самый большой из найденных, а не первый попавшийся
+    assert r > _edge_dist(*project(5.0, 5.0, frame), poly), "круг не наибольший"
 
     g = graticule(GEO_BOX, frame, w, h)
     assert g.count("M") == len(range(-30, 57, GRID_LAT)) + len(range(-20, 149, GRID_LON))

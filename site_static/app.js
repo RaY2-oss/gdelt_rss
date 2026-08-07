@@ -1136,6 +1136,160 @@
   }
 
 
+  // ── Приближение карты ─────────────────────────────────────────────────
+  // Двигаем viewBox, а не масштабируем картинку: геометрия остаётся векторной,
+  // страны остаются ссылками, обводки — благодаря non-scaling-stroke — прежней
+  // толщины. Ни холста, ни библиотеки, ни второго набора данных.
+  //
+  // Кегль подписей идёт навстречу приближению (--lab = кегль / кратность), из-за
+  // чего имя на экране всегда одного размера, а страна под ним растёт. В этом
+  // весь смысл приближения на этой карте: имена не мельчают, а проявляются —
+  // каждое, как только помещается внутрь своих границ. Порог посчитан на сборке
+  // и лежит в data-fit.
+  var mapField = q$('[data-map]');
+  var zpad = mapField && mapField.parentNode.querySelector('[data-map-zoom]');
+  if (mapField && zpad) {
+    var msvg = mapField.querySelector('svg');
+    var vbox = msvg.viewBox.baseVal;
+    var W = vbox.width, H = vbox.height;
+    // Кегль подписи держится в пикселях экрана, а не в единицах кадра: кадр
+    // шириной 1800 на телефоне ужат до 390, и подпись в единицах кадра выходила
+    // там трёхпиксельной. LAB_REF — тот же кегль, из которого site.py считал
+    // порог data-fit (LABEL_EM), и отношение LAB_REF/LAB_PX задаёт опорный
+    // разворот: на нём eff совпадает с кратностью приближения один в один.
+    var LAB_PX = 10;
+    var LAB_REF = 16;
+    var ZMAX = 6;      // тот же предел, что MAP_ZOOM_MAX
+    var mlabs = Array.prototype.slice.call(msvg.querySelectorAll('.rmap__lab'));
+    var zout = zpad.querySelector('[data-zoom-out]');
+    var zreset = zpad.querySelector('.rmap__reset');
+    // Куда приближать по кнопке. Не в середину кадра: она приходится на
+    // Индийский океан, и первое же нажатие показывало пустую воду. Середина
+    // охвата считается по местам подписей — каждое из них заведомо лежит
+    // внутри страны, и среднее по ним попадает в гущу суши.
+    var hx = 0, hy = 0;
+    var z = 1, cx = W / 2, cy = H / 2;
+
+    // Ширина карты на экране. Меряем редко и держим: в свёрнутом <details> она
+    // нулевая, а во время перетаскивания замер на каждом кадре — это принуждение
+    // к пересчёту компоновки на ровном месте.
+    var pxw = 0;
+    var measure = function () {
+      var r = msvg.getBoundingClientRect();
+      if (r.width > 8) pxw = r.width;
+    };
+
+    var mdraw = function () {
+      var w = W / z, h = H / z;
+      // центр не пускаем дальше края: за рамкой кадра геометрии нет, и уехавшая
+      // туда карта показывала бы пустое поле вместо суши
+      cx = Math.min(W - w / 2, Math.max(w / 2, cx));
+      cy = Math.min(H - h / 2, Math.max(h / 2, cy));
+      msvg.setAttribute('viewBox',
+        (cx - w / 2).toFixed(1) + ' ' + (cy - h / 2).toFixed(1) +
+        ' ' + w.toFixed(1) + ' ' + h.toFixed(1));
+      // Сколько единиц кадра приходится на пиксель экрана. Отсюда и кегль
+      // (чтобы имя на экране всегда было одного размера), и eff — во сколько
+      // раз карта сейчас крупнее опорного разворота. Приближение и широкий
+      // экран для подписи — одно и то же: и там и там страна стала больше.
+      var k = pxw ? w / pxw : LAB_REF / LAB_PX / z;
+      var eff = LAB_REF / LAB_PX / k;
+      msvg.style.setProperty('--lab', (LAB_PX * k).toFixed(2) + 'px');
+      // Через атрибут, а не через t.hidden: свойство hidden живёт на
+      // HTMLElement, а <text> — SVGElement, и присваивание молча заводило бы
+      // на нём обычное поле, не трогая разметку. Подписи так и не проявлялись,
+      // причём проверка t.hidden отвечала ровно то, что ей записали.
+      mlabs.forEach(function (t) {
+        if (+t.dataset.fit > eff) t.setAttribute('hidden', '');
+        else t.removeAttribute('hidden');
+      });
+      zout.textContent = (z < 10 ? z.toFixed(1).replace('.0', '') : z) + '×';
+      zreset.hidden = z === 1;
+      if (z === 1) mapField.removeAttribute('data-zoomed');
+      else mapField.setAttribute('data-zoomed', '');
+      zpad.querySelector('[data-zoom="-1"]').disabled = z <= 1;
+      zpad.querySelector('[data-zoom="1"]').disabled = z >= ZMAX;
+    };
+
+    zpad.hidden = false;   // кнопки показываются только когда есть кому их слушать
+    zpad.addEventListener('click', function (e) {
+      var b = e.target.closest('button[data-zoom]');
+      if (!b) return;
+      var step = +b.dataset.zoom;
+      var from = z;
+      z = step ? Math.min(ZMAX, Math.max(1, z * (step > 0 ? 1.6 : 1 / 1.6))) : 1;
+      if (z < 1.05) z = 1;
+      if (!step || z === 1) { cx = W / 2; cy = H / 2; }
+      else if (from === 1) { cx = hx; cy = hy; }
+      mdraw();
+    });
+
+    // Колесо перехватываем только с Ctrl (на макбуке это же и щипок тачпадом):
+    // карта во всю ширину, отбирающая прокрутку страницы, — ловушка, из которой
+    // читатель выбирается мышью по краю экрана.
+    mapField.addEventListener('wheel', function (e) {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      var b = msvg.getBoundingClientRect();
+      var w = W / z, h = H / z;
+      // точка под курсором остаётся под курсором: приближаем к ней, а не к
+      // середине кадра
+      var px = cx - w / 2 + (e.clientX - b.left) / b.width * w;
+      var py = cy - h / 2 + (e.clientY - b.top) / b.height * h;
+      var was = z;
+      z = Math.min(ZMAX, Math.max(1, z * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+      cx = px - (px - cx) * (was / z);
+      cy = py - (py - cy) * (was / z);
+      if (z === 1) { cx = W / 2; cy = H / 2; }
+      mdraw();
+    }, { passive: false });
+
+    // Перетаскивание. Страны — ссылки, поэтому протяжку надо отличать от
+    // нажатия: сдвинулись больше четырёх пикселей — гасим последующий click,
+    // иначе каждый сдвиг карты уводил бы на страницу страны.
+    var mdrag = null, mmoved = false;
+    mapField.addEventListener('pointerdown', function (e) {
+      if (z === 1 || e.button) return;
+      mdrag = { x: e.clientX, y: e.clientY, cx: cx, cy: cy };
+      mmoved = false;
+      mapField.setAttribute('data-mdrag', '');
+      mapField.setPointerCapture(e.pointerId);
+    });
+    mapField.addEventListener('pointermove', function (e) {
+      if (!mdrag) return;
+      var b = msvg.getBoundingClientRect();
+      var dx = e.clientX - mdrag.x, dy = e.clientY - mdrag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 4) mmoved = true;
+      cx = mdrag.cx - dx / b.width * (W / z);
+      cy = mdrag.cy - dy / b.height * (H / z);
+      mdraw();
+    });
+    var mdrop = function () { mdrag = null; mapField.removeAttribute('data-mdrag'); };
+    mapField.addEventListener('pointerup', mdrop);
+    mapField.addEventListener('pointercancel', mdrop);
+    mapField.addEventListener('click', function (e) {
+      if (mmoved) { e.preventDefault(); e.stopPropagation(); mmoved = false; }
+    }, true);
+
+    mlabs.forEach(function (t) {
+      hx += +t.getAttribute('x');
+      hy += +t.getAttribute('y');
+    });
+    if (mlabs.length) { hx /= mlabs.length; hy /= mlabs.length; }
+    else { hx = W / 2; hy = H / 2; }
+
+    // Ширина меняется от поворота экрана и от разворачивания атласа — в
+    // свёрнутом виде её просто нет.
+    addEventListener('resize', function () { measure(); mdraw(); });
+    var mbox = mapField.closest('details');
+    if (mbox) mbox.addEventListener('toggle', function () {
+      if (mbox.open) { measure(); mdraw(); }
+    });
+    measure();
+    mdraw();
+  }
+
+
   // ── Проявление при прокрутке там, где нет CSS-таймлайнов ──────────────
   // В Chromium всё движение считает CSS (animation-timeline: view()), и сюда
   // мы не заходим. В Firefox и Safari таймлайнов нет — без этого лента у

@@ -705,31 +705,131 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
 }
 
 /* Соседи по кадру — только контур: они не открываются и не должны спорить за
-   внимание со странами охвата. */
+   внимание со странами охвата. Заливка нарочно бледнее, чем нижняя ступень
+   шкалы: раньше Европа с Австралией весили на кадре столько же, сколько тихая
+   страна охвата, и глаз не отличал «здесь пусто» от «сюда мы не смотрим». */
 .rmap__rest {
-  fill: color-mix(in oklab, var(--ink) 6%, transparent);
+  fill: color-mix(in oklab, var(--ink) 3.5%, transparent);
   stroke: var(--grat);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 
 /* Страна охвата. Заливка — важность её верхнего сюжета, той же шкалой, что и
-   лента: карта и лента красятся из одного набора ступеней. */
+   лента: карта и лента красятся из одного набора ступеней.
+
+   Ступень идёт в полную силу, без разбавления прозрачностью. Разбавленная на
+   58 % шкала садилась на цвет поля и съезжалась: пять ступеней превращались в
+   три, а половина Африки — в одно пятно. Прозрачность экономила на обводке,
+   которой хватило и без неё. */
 .rmap__land path, .rmap__land circle {
-  fill: color-mix(in oklab, var(--tier) 58%, transparent);
+  fill: var(--tier);
   stroke: var(--panel-sunk);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
   transition: fill 0.16s;
 }
 .rmap__land { cursor: pointer; }
+/* Наведение больше не может добавить цвета — он весь уже налит, — поэтому
+   держится обводкой. Она же работает и на точечных микрогосударствах. */
 .rmap__land:hover path, .rmap__land:hover circle,
 .rmap__land:focus-visible path, .rmap__land:focus-visible circle {
-  fill: var(--tier);
   stroke: var(--ink);
-  stroke-width: 2;
+  stroke-width: 2.5;
 }
 .rmap__land:focus-visible { outline: none; }
+
+/* Имя страны прямо на фигуре. Карта без подписей читается только наведением,
+   то есть с телефона не читается вовсе.
+
+   Кегль задан в пикселях экрана, а не кадра: при приближении карты подписи
+   остаются прежнего размера, страна растёт, и внутрь помещаются имена, которые
+   раньше не влезали (см. app.js). Что и во сколько раз влезает, посчитано на
+   сборке — site.py, data-fit.
+
+   Цвет не зависит от темы, хотя шкала в темах развёрнута: --ink читается на
+   нижних ступенях в обеих (на бумаге они светлые, на экране тёмные), --panel —
+   на верхних, тоже в обеих. Обводка того же ряда даёт ореол, поэтому имя не
+   тонет на границе двух заливок. */
+.rmap__lab {
+  fill: var(--ink);
+  stroke: var(--panel);
+  /* ореол привязан к кеглю, а не задан в единицах кадра: единицы кадра растут
+     вместе с приближением, и на пятикратном ореол съедал сами буквы */
+  stroke-width: calc(var(--lab, 16px) / 5);
+  paint-order: stroke;
+  font: 700 var(--lab, 16px)/1 var(--font-display);
+  letter-spacing: -0.01em;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+.rmap__lab[data-tier='2'], .rmap__lab[data-tier='3'], .rmap__lab[data-tier='4'] {
+  fill: var(--panel);
+  stroke: var(--ink);
+}
+.rmap__lab[hidden] { display: none; }
+
+/* ── Шапка карты: легенда и приближение ───────────────────────────────── */
+.rmap__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.5rem;
+}
+.rmap__key {
+  display: flex;
+  align-items: center;
+  gap: 0.4375rem;
+  margin: 0;
+  font: 400 0.6875rem/1 var(--font-data);
+  color: var(--ink-3);
+}
+.rmap__key-cap { margin-inline-end: 0.125rem; }
+.rmap__key-end { font-variant-numeric: tabular-nums; }
+/* Ступени стоят встык, без зазоров: шкала последовательная, и разрывы между
+   плитками читались бы как разрыв в величине. */
+.rmap__key-bar { display: flex; border: 1px solid var(--rule); border-radius: 2px; }
+.rmap__key-bar i { width: 1.5rem; height: 0.5rem; background: var(--tier); }
+
+.rmap__zoom {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0;
+  font: 400 0.6875rem/1 var(--font-data);
+  color: var(--ink-3);
+}
+.rmap__zoom button {
+  min-width: 1.75rem;
+  padding: 0.25rem 0.4375rem;
+  font: inherit;
+  color: var(--ink-2);
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  cursor: pointer;
+}
+.rmap__zoom button:hover { border-color: var(--rule-strong); color: var(--ink); }
+.rmap__zoom button[disabled] { opacity: 0.4; cursor: default; }
+.rmap__zoom output {
+  min-width: 2.25rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Приближённая карта тянется мышью, и курсор об этом говорит; ссылки под ним
+   при этом продолжают работать — тянем только при зажатой кнопке.
+
+   touch-action снимается только у приближённой: на целом кадре палец по карте
+   должен листать страницу, как по любому другому месту, и отбирать у него это
+   ради жеста, который на целом кадре всё равно ничего не двигает, — ловушка.
+   У приближённой палец водит карту, а выход из неё в двух сантиметрах —
+   кнопка «весь кадр». */
+.rmap__field[data-zoomed] { cursor: grab; touch-action: none; }
+.rmap__field[data-drag] { cursor: grabbing; }
 
 /* Показание. Стоит под полем на фиксированном месте: всплывающая подсказка у
    края карты уезжала за поле, а под курсором закрывала соседние страны.
