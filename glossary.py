@@ -22,6 +22,11 @@
 Для LLM (см. /opt/digest/sunday_processor_mmr.py) постобработка НЕ ПРИМЕНЯЕТСЯ
 вообще: она сломает и падежи, и уже прописанное там правило «организации
 остаются латиницей». Туда словарь идёт текстом в промпт — as_prompt_block().
+
+Формат строки: исходная_форма <TAB> замена <TAB> режим [<TAB> пояснение].
+Четвёртая колонка необязательна и нужна ТОЛЬКО промпту: это одна строка о том,
+что такое термин («TENMAK — турецкое агентство исследований в энергетике,
+ядерных технологиях и полезных ископаемых»). Локальный переводчик её не видит.
 """
 import logging
 import os
@@ -50,6 +55,7 @@ _MARK_RE = re.compile(r"XX(\d+)XX")
 
 _lock = threading.Lock()
 _cache = None      # {нормализованная фраза: (замена, режим)}
+_gloss = {}        # {нормализованная фраза: краткое пояснение} — только для LLM
 _maxw = 1          # максимум слов во фразе словаря
 _mtime = None
 
@@ -77,7 +83,7 @@ def _files():
 
 def _load():
     """Читаем при первом обращении и перечитываем, если любой файл поменялся."""
-    global _cache, _mtime, _maxw
+    global _cache, _gloss, _mtime, _maxw
     with _lock:
         files = _files()
         try:
@@ -86,7 +92,7 @@ def _load():
             return _cache if _cache is not None else {}
         if _cache is not None and m == _mtime:
             return _cache
-        idx, maxw = {}, 1
+        idx, gloss, maxw = {}, {}, 1
         for path in files:
             try:
                 with open(path, encoding="utf-8") as fh:
@@ -106,12 +112,18 @@ def _load():
                         if not key or not dst or mode not in ("keep", "ru") or key in idx:
                             continue
                         idx[key] = (dst, mode)
+                        # Необязательная четвёртая колонка — краткое пояснение
+                        # для читателя, не знакомого с темой. Локальному
+                        # переводчику она не нужна и не мешает: он смотрит
+                        # только в idx.
+                        if len(parts) > 3 and parts[3].strip():
+                            gloss[key] = parts[3].strip()
                         maxw = max(maxw, key.count(" ") + 1)
             except OSError as exc:
                 log.warning("glossary: не читается %s: %s", path, exc)
-        _cache, _mtime, _maxw = idx, m, maxw
-        log.info("glossary: %d терминов из %d файлов (до %d слов во фразе)",
-                 len(idx), len(files), maxw)
+        _cache, _gloss, _mtime, _maxw = idx, gloss, m, maxw
+        log.info("glossary: %d терминов из %d файлов (%d с пояснением, "
+                 "до %d слов во фразе)", len(idx), len(files), len(gloss), maxw)
         return _cache
 
 
@@ -248,14 +260,23 @@ def as_prompt_block(text=None, entities=None, limit=60):
     idx = _load()
     if not idx:
         return ""
+
+    def line(key, dst, mode):
+        # Пояснение (четвёртая колонка) идёт той же строкой: модель не знает,
+        # что такое TENMAK или LGS, и без подсказки либо промолчит, либо
+        # выдумает расшифровку. Промпт дайджеста велит вводить их в текст.
+        out = '  "%s" -> %s' % (key, dst if mode == "ru"
+                                else "%s (keep Latin script)" % dst)
+        g = _gloss.get(key)
+        return out + (" — %s" % g if g else "")
+
     lines, seen = [], set()
     if text:
         for _a, _b, key, dst, mode in find_all(text):
             if key in seen:
                 continue
             seen.add(key)
-            lines.append('  "%s" -> %s' % (key, dst if mode == "ru"
-                                           else "%s (keep Latin script)" % dst))
+            lines.append(line(key, dst, mode))
             if len(lines) >= limit:
                 break
     else:
@@ -265,14 +286,15 @@ def as_prompt_block(text=None, entities=None, limit=60):
         for key, (dst, mode) in idx.items():
             if want is not None and key not in want:
                 continue
-            lines.append('  "%s" -> %s' % (key, dst if mode == "ru"
-                                           else "%s (keep Latin script)" % dst))
+            lines.append(line(key, dst, mode))
             if len(lines) >= limit:
                 break
     if not lines:
         return ""
     return ("Established renderings — use exactly these forms, inflecting them "
-            "for Russian grammar as needed:\n" + "\n".join(lines))
+            "for Russian grammar as needed. Where a Russian gloss follows an "
+            "em dash, it is what the term means; use it to introduce the term "
+            "to a reader who has never heard of it:\n" + "\n".join(lines))
 
 
 def _selfcheck():
