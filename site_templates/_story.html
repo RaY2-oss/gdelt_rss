@@ -35,28 +35,13 @@
 {% endmacro %}
 
 
-{# Полный текст головной статьи. Когда обзор есть, в свёрнутом виде тут стоит
-   не подводка (её роль забрал обзор, и повторять её значило бы напечатать одно
-   и то же дважды), а прямое приглашение раскрыть статью. #}
+{# Подводка головной статьи — и только когда обзора нет. Раскрытия «Статья
+   целиком» здесь больше не стоит: обзор собран из всех источников сюжета и
+   отвечает на тот же вопрос полнее, а полный текст статьи-победителя дублировал
+   его и отдавал сюжет одному изданию из шести. Кому нужен первоисточник — он
+   в списке источников, и там их все. #}
 {% macro snippet(s) %}
-{% if s.body %}
-<details class="full{% if s.overview %} full--under{% endif %}" {% if not s.translated and s.lang_code %}lang="{{ s.lang_code }}"{% endif %}>
-  <summary class="full__sum">
-    <span class="full__cut">{% if s.overview %}Статья целиком{% else %}{{ s.snippet }}{% endif %}</span>
-    <span class="full__less">свернуть текст</span>
-  </summary>
-  <div class="full__text">
-    {% for para in s.body %}<p>{{ para }}</p>{% endfor %}
-    {# Свернуть можно и снизу: дочитавший текст стоит в его конце, а
-       единственная кнопка сворачивания была наверху — приходилось листать
-       обратно к началу, чтобы закрыть. #}
-    <p class="full__out">
-      <a href="{{ s.url }}" rel="noopener nofollow">Открыть на {{ s.domain }}</a>
-      <button class="full__hide" type="button" data-close-full>свернуть текст</button>
-    </p>
-  </div>
-</details>
-{% elif s.snippet and not s.overview %}
+{% if s.snippet and not s.overview %}
 <p class="story__snippet" {% if not s.translated and s.lang_code %}lang="{{ s.lang_code }}"{% endif %}>{{ s.snippet }}</p>
 {% endif %}
 {% endmacro %}
@@ -77,11 +62,16 @@
 {% endmacro %}
 
 
-{# Издания сюжета — ВСЕ, включая то, на которое ведёт заголовок. Раньше главное
-   стояло отдельной подписью в выходных данных, а список назывался «Ещё N
-   источников» и главное в себя не включал: получалось два разных счёта одного
-   и того же, и на строке с шестью изданиями «Ещё 5» читалось как ошибка.
-   Теперь счёт один — сколько изданий написало о сюжете. #}
+{# Издания сюжета — ВСЕ. Раньше главное стояло отдельной подписью в выходных
+   данных, а список назывался «Ещё N источников» и главное в себя не включал:
+   получалось два разных счёта одного и того же, и на строке с шестью изданиями
+   «Ещё 5» читалось как ошибка. Теперь счёт один — сколько изданий написало
+   о сюжете.
+
+   Порядок не случайный и не по времени: первым идёт издание, чей разбор
+   полнее и весомее прочих, последним — самый куцый (см. source_rank
+   в site.py). Список стал единственным выходом наружу — заголовок больше
+   не ссылка, — и первая же строка должна вести туда, куда стоит идти. #}
 {% macro sources(s) %}
 {# Одно издание — просто его имя: «1 источник» под раскрывающимся треугольником
    прячет одну строку за двумя щелчками. #}
@@ -92,7 +82,7 @@
   <summary class="story__summary">{{ s.sources|length }} {{ s.sources|length|plural('источник','источника','источников') }}</summary>
   <ul class="story__sources">
     {% for src in s.sources %}
-    <li><a href="{{ src.url }}" rel="noopener nofollow">{{ src.domain }}</a>{% if loop.first %} <i class="story__head">заголовок отсюда</i>{% endif %}</li>
+    <li><a href="{{ src.url }}" rel="noopener nofollow">{{ src.domain }}</a>{% if src.head %} <i class="story__head">заголовок отсюда</i>{% endif %}</li>
     {% endfor %}
   </ul>
 </details>
@@ -112,7 +102,10 @@
 {% macro akin(s) %}
 {% if s.akin %}
 <details class="akin" data-akin>
-  <summary class="akin__sum">Похожие сюжеты<b>{{ s.akin }}</b></summary>
+  {# Подписано как список источников: число, потом что считаем. Раньше здесь
+     стояло «Похожие сюжеты» и число отдельным жирным хвостом — два соседних
+     раскрытия у одной строки выглядели двумя разными механизмами. #}
+  <summary class="akin__sum">{{ s.akin }} {{ s.akin|plural('похожий сюжет','похожих сюжета','похожих сюжетов') }}</summary>
   <ol class="akin__list" data-akin-list><li class="akin__wait">Ищем…</li></ol>
 </details>
 {% endif %}
@@ -124,15 +117,22 @@
    Кнопка стоит в левом поле под номером — там, где у строки и так пусто. #}
 {% macro keep() %}
 <button class="keep" type="button" data-keep aria-pressed="false"
-        aria-label="Отложить сюжет" title="Отложить (клавиша s)">
+        aria-label="Отложить сюжет" title="Отложить сюжет">
   <span class="keep__ico" aria-hidden="true"></span>
 </button>
 {% endmacro %}
 
 
-{% macro story(s, show_country=True, i=0, no=1) %}
+{# Заголовок — просто текст, не ссылка. Он больше и не принадлежит одному
+   изданию: сюжет собран из нескольких, и уводить с него в то, чей заголовок
+   выиграл отбор, значило бы выдавать одно издание за весь сюжет. Все выходы
+   наружу собраны в источниках и в подписях под строками обзора.
+
+   Адрес головной статьи всё же нужен — им закладки и похожие сюжеты опознают
+   строку, — и живёт теперь в data-url, а не в href. #}
+{% macro story(s, show_country=True, i=0, no=1, eyebrow=None) %}
 <article class="story" style="--w: {{ s.score }}; --i: {{ i if i < 20 else 20 }}" data-tier="{{ s.tier }}"
-         data-score="{{ s.score }}" data-day="{{ s.day }}"
+         data-score="{{ s.score }}" data-day="{{ s.day }}" data-url="{{ s.url }}"
          data-find="{{ s.title|lower }} {{ s.country_ru|lower }} {{ s.domain }} {% for e in s.entities %}{{ ru_name(e)|lower }} {% endfor %}">
   <div class="story__sig">
     <span class="story__no">{{ no }}</span>
@@ -140,9 +140,8 @@
   </div>
 
   <div class="story__body">
-    <h3 class="story__title">
-      <a class="story__link" href="{{ s.url }}" rel="noopener nofollow" {% if s.lang_code %}lang="{{ s.lang_code }}"{% endif %}>{{ s.title }}</a>
-    </h3>
+    {% if eyebrow %}<p class="story__eyebrow">{{ eyebrow }}</p>{% endif %}
+    <h3 class="story__title" {% if not s.translated and s.lang_code %}lang="{{ s.lang_code }}"{% endif %}>{{ s.title }}</h3>
 
     <p class="story__meta">
       <span class="story__imp" title="Важность {{ s.score }} из 100">
@@ -219,8 +218,9 @@
    архиву: там весь корпус, тем же порядком, и грузится он лениво. Складывать
    в страницу все шесть тысяч карточек нельзя — это шестьдесят мегабайт, — а
    отдавать читателю только сотню, когда в архиве шесть тысяч, нечестно. #}
-{% macro pager() %}
-<nav class="pager" data-pager hidden aria-label="Страницы ленты">
+{% macro pager(where='') %}
+<nav class="pager{% if where %} pager--{{ where }}{% endif %}" data-pager hidden
+     aria-label="Страницы ленты{% if where == 'top' %}, вверху{% endif %}">
   <button class="pager__step" type="button" data-pg="-1" aria-label="Назад">←</button>
   <span class="pager__nums" data-pg-nums></span>
   <button class="pager__step" type="button" data-pg="1" aria-label="Дальше">→</button>
@@ -240,11 +240,16 @@
 {# total — весь охват ленты, а не то, что попало в разметку: по нему листалка
    знает число страниц ещё до того, как подтянет архив. Область (страна,
    регион или вся витрина) читается из <body data-country|data-region>. #}
-{% macro feed(items, show_country=True, empty='За весь период ничего не набралось.', start=1, total=0) %}
+{% macro feed(items, show_country=True, empty='За весь период ничего не набралось.', start=1, total=0, eyebrow=None) %}
 {% if items %}
+{# Листалка стоит и над лентой тоже. Внизу она одна была неудобна ровно тем,
+   что до неё нужно долистать: чтобы уйти с первой страницы на сороковую, сто
+   строк приходилось проматывать целиком. Разметка одна и та же, обе слушает
+   один код (pagers в app.js), номер страницы у них общий. #}
+{{ pager('top') }}
 <div class="feed" id="feed" data-feed data-total="{{ total or items|length }}"
      {% if not show_country %}data-nocountry{% endif %}>
-  {% for s in items %}{{ story(s, show_country, loop.index0, loop.index0 + start) }}{% endfor %}
+  {% for s in items %}{{ story(s, show_country, loop.index0, loop.index0 + start, eyebrow if loop.first else None) }}{% endfor %}
 </div>
 {# Первая страница отмеряется прямо здесь, при разборе документа, а не в
    app.js. Скрипт отложенный (defer), то есть работает уже после того, как
@@ -260,9 +265,7 @@
   var z = 20;
   try { z = +localStorage.getItem('pgsize') || 20; } catch (e) {}
   if ([20, 50, 100].indexOf(z) < 0) z = 20;
-  // лид — тоже первый сюжет ленты, просто набранный крупно и стоящий выше
-  var from = z - (document.querySelector('.story--lead') ? 1 : 0);
-  for (var i = from; i < f.children.length; i++) f.children[i].hidden = true;
+  for (var i = z; i < f.children.length; i++) f.children[i].hidden = true;
 })();
 </script>
 <div class="feed feed--tail" data-feed-tail hidden></div>

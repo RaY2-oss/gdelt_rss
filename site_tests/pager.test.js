@@ -49,15 +49,20 @@ function goto(d, p) {
   // ── Главная ───────────────────────────────────────────────────────────
   {
     const { w, d, fetches } = boot('index.html');
-    const pager = d.querySelector('[data-pager]');
+    const pagers = [...d.querySelectorAll('[data-pager]')];
+    const pager = pagers[0];
     const stat = d.querySelector('[data-pg-stat]');
     const total = +d.querySelector('[data-feed]').dataset.total;
     const pages = Math.ceil(total / 20);
 
     assert.equal(fetches(), 0, 'корпус не должен грузиться сам по себе');
-    assert.ok(!pager.hidden, 'листалка показалась');
+    assert.equal(pagers.length, 2, 'листалок должно быть две — над лентой и под ней');
+    assert.ok(pagers.every((p) => !p.hidden), 'листалка показалась');
     assert.equal(vis(d, '.story').length, 20, 'на первой странице 20 строк');
-    assert.equal(d.querySelector('.story--lead').hidden, false, 'лид на первой странице');
+    // Лида отдельной вёрсткой больше нет: первый сюжет — обычная первая строка
+    // ленты, и надпись над ним ставит feed().
+    assert.equal(d.querySelector('.story--lead'), null, 'лид снова отдельной вёрсткой');
+    assert.equal(d.querySelector('.story__eyebrow').textContent.trim(), 'Верх двух недель');
     assert.equal(stat.textContent, '1–20 из ' + total, 'глубина известна без корпуса');
     assert.deepEqual(nos(d), [...Array(20)].map((_, i) => i + 1), 'номера идут подряд с единицы');
 
@@ -65,7 +70,6 @@ function goto(d, p) {
     d.querySelector('[data-pg="1"]').click();
     assert.equal(fetches(), 1, 'корпус запрошен на первом же перелистывании');
     assert.equal(vis(d, '.story').length, 20);
-    assert.equal(d.querySelector('.story--lead').hidden, true, 'лид ушёл со второй страницы');
     assert.equal(nos(d)[0], 21);
     assert.equal(stat.textContent, '21–40 из ' + total);
     assert.equal(d.querySelector('[data-feed]').dataset.turn, 'fwd', 'страница перевернулась вперёд');
@@ -83,7 +87,14 @@ function goto(d, p) {
     assert.ok(!tailBox.hidden, 'хвост архива показан');
     assert.equal(tail.length, total - (pages - 1) * 20, 'на последней странице остаток');
     assert.equal(vis(d, '[data-feed] .story').length, 0, 'из разметки на последней странице ничего');
-    assert.ok(tail[0].querySelector('.story__link').href, 'у строки хвоста есть ссылка');
+    // Заголовок больше не ссылка — адрес живёт в data-url, а наружу ведёт
+    // подпись издания под текстом. И текст у карточки хвоста быть обязан:
+    // без него вторая страница выглядела как лента без новостей.
+    assert.ok(tail[0].dataset.url, 'у строки хвоста нет адреса');
+    assert.equal(tail[0].querySelector('.story__title a'), null, 'заголовок снова ссылка');
+    assert.ok(tail[0].querySelector('.story__solo a').href, 'у строки хвоста нет выхода наружу');
+    assert.ok(tail[0].querySelector('.story__snippet').textContent.length > 20,
+      'у строки хвоста нет текста');
     assert.ok(tail[0].querySelector('.story__country'), 'на главной страна показана');
     assert.equal(+tail[0].querySelector('.story__no').textContent, (pages - 1) * 20 + 1);
     assert.equal(tailBox.dataset.turn, 'fwd');
@@ -97,11 +108,31 @@ function goto(d, p) {
       assert.deepEqual(nos(d), [...Array(here.length)].map((_, i) => (p - 1) * 20 + i + 1),
         'нумерация на странице ' + p);
       here.forEach((n) => {
-        const href = n.querySelector('.story__link').href;
+        const href = n.dataset.url;
         assert.ok(!seen.has(href), 'сюжет показан дважды: ' + href);
         seen.add(href);
       });
     }
+
+    // ── обе листалки говорят одно и то же ──────────────────────────────
+    assert.deepEqual([...d.querySelectorAll('[data-pg-stat]')].map((n) => n.textContent),
+      [stat.textContent, stat.textContent], 'верхняя и нижняя листалки разошлись');
+
+    // ── многоточие раскрывает середину пропуска ────────────────────────
+    goto(d, 1);
+    // Номера считаем по одной листалке: их две, и обе несут одни и те же кнопки.
+    const numsOf = () => [...pager.querySelectorAll('.pager__num')].map((b) => +b.textContent);
+    const gapBtn = pager.querySelector('.pager__gap');
+    assert.ok(gapBtn, 'пропуска в номерах нет — проверять нечего');
+    assert.equal(gapBtn.tagName, 'BUTTON', 'многоточие всё ещё подпись, а не кнопка');
+    const was = numsOf();
+    gapBtn.click();
+    const now = numsOf();
+    assert.equal(now.length, was.length + 1, 'страница посередине не появилась');
+    const mid = now.find((n) => was.indexOf(n) < 0);
+    assert.ok(mid > 2 && mid < pages, 'раскрылась не середина, а край: ' + mid);
+    assert.equal(+d.querySelector('.pager__num.is-here').textContent, 1,
+      'нажатие на многоточие само перелистнуло страницу');
 
     // ── размер страницы ────────────────────────────────────────────────
     goto(d, 1);

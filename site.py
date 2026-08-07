@@ -18,6 +18,7 @@
 """
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -206,6 +207,128 @@ _translate_until = 0.0
 IMPORTANT_AT = 50
 
 
+_REACH = None
+
+
+def reach(conn):
+    """Вес издания — сколько статей оно дало за окно витрины.
+
+    Готового рейтинга авторитетности взять негде: списки вроде Alexa платные,
+    а индийские, нигерийские и индонезийские издания, которых тут половина,
+    в них всё равно не входят. Зато есть собственный корпус: редакция, давшая
+    за две недели триста разборов по нашим темам, — большая, давшая один —
+    перепечатка агентства. Мера грубая, зато считается из того, что уже лежит
+    в базе, и не устаревает вместе с чужим рейтингом.
+    """
+    global _REACH
+    if _REACH is None:
+        _REACH = {}
+        if conn is None:            # самопроверка зовёт stories() без базы
+            return _REACH
+        for (url,) in conn.execute(
+                "SELECT url FROM articles WHERE fetched_at > datetime('now', ?)",
+                (f"-{SITE_HOURS} hours",)):
+            d = imp.domain(url)
+            if d:
+                _REACH[d] = _REACH.get(d, 0) + 1
+    return _REACH
+
+
+def source_rank(text, domain, reach_map):
+    """Место издания в списке источников: чем больше, тем выше.
+
+    Две величины, обе из того, что уже есть. Детальность — длина разбора:
+    двадцать тысяч знаков против пятисот это не оттенок, а разница между
+    репортажем с места и заметкой «как сообщает агентство». Весомость — тот
+    самый reach выше.
+
+    Обе берутся логарифмом. Между 500 и 5000 знаками разница огромная, между
+    20 000 и 25 000 её уже нет — без логарифма один случайный лонгрид с
+    комментариями читателей встал бы выше нормального репортажа. Детальность
+    весит больше: она про эту конкретную статью, а вес издания — про издание
+    вообще, и мелкое издание с подробным разбором на месте событий полезнее
+    крупного с четырьмя абзацами перепечатки.
+    """
+    detail = min(1.0, math.log1p(len(text or "")) / math.log1p(6000))
+    weight = min(1.0, math.log1p(reach_map.get(domain, 1)) / math.log1p(300))
+    return 0.62 * detail + 0.38 * weight
+
+
+# Отбор заголовка сюжета. Цифры — то, чем один заголовок лучше другого;
+# трогать их значит менять, какая строка встанет в ленту.
+TITLE_MIN = 28         # короче — не заголовок, а рубрика: «Дайджест», «Наука»
+TITLE_MAX = 170        # длиннее — это уже подводка, вставшая в поле <title>
+TITLE_SWEET = (50, 112)
+
+
+def _title_flaws(s):
+    """Сколько снять с заголовка за то, за что цепляется глаз.
+
+    Всё перечисленное — не вкусовщина, а то, что регулярно приезжает в поле
+    <title> чужих страниц и одинаково плохо читается в ленте.
+    """
+    bad = 0.0
+    letters = [c for c in s if c.isalpha()]
+    if letters and sum(c.isupper() for c in letters) / len(letters) > 0.55:
+        bad += 0.30                       # КРИЧАЩИЙ ЗАГОЛОВОК ЦЕЛИКОМ
+    if s.rstrip().endswith(("...", "…")):
+        bad += 0.22                       # обрезан на середине мысли
+    if s.count("|") or s.count(" - ") > 1:
+        bad += 0.12                       # хвост рубрикатора издания
+    if re.search(r"\b(видео|фото|подкаст|галерея|онлайн|прямая трансляция)\b",
+                 s, re.I):
+        bad += 0.15                       # это подпись к формату, а не событие
+    if s.endswith("?"):
+        bad += 0.08                       # вопрос вместо новости
+    if not re.search(r"[а-яёa-z]", s, re.I):
+        bad += 0.5                        # одни цифры и знаки
+    return bad
+
+
+def pick_title(cands, vecs):
+    """Заголовок сюжета — лучший из заголовков его источников.
+
+    Раньше в ленту шёл заголовок статьи-победителя, а она выигрывала отбор по
+    читаемости и дате — вовсе не потому, что удачно называлась. Отсюда и
+    брались строки вроде «Лаборатория встречает реальный мир на китайском
+    роботе», при том что соседнее издание в том же сюжете называлось внятно.
+
+    Отбор, а не пересказ, — по той же причине, что и в обзоре (см. overview):
+    генеративная модель на этом железе переворачивает факты примерно в каждом
+    пятом случае, а заголовок врать не имеет права вовсе. Побеждает тот, что
+    ближе других к смысловому центру сюжета — то есть говорит об общем, а не
+    о частности одного издания, — и меньше других цепляется за глаз.
+
+    `cands` — готовые к показу строки, `vecs` — их эмбеддинги (или None).
+    Возвращает индекс победителя; при пустом входе — None.
+    """
+    live = [i for i, s in enumerate(cands) if s and TITLE_MIN <= len(s) <= TITLE_MAX]
+    if not live:
+        # Все кандидаты за границами меры — берём первый непустой, чтобы
+        # строка не осталась без заголовка вовсе.
+        return next((i for i, s in enumerate(cands) if s), None)
+    if len(live) == 1:
+        return live[0]
+
+    import numpy as np
+    sim = {i: 0.0 for i in live}
+    have = [i for i in live if vecs[i] is not None and vecs[i].size]
+    if len(have) > 1:
+        m = np.asarray([vecs[i] for i in have], np.float32)
+        m /= np.linalg.norm(m, axis=1, keepdims=True).clip(1e-6)
+        mid = m.mean(axis=0)
+        mid /= max(float(np.linalg.norm(mid)), 1e-6)
+        for i, v in zip(have, m @ mid):
+            sim[i] = float(v)
+
+    def score(i):
+        s = cands[i]
+        fit = 0.16 if TITLE_SWEET[0] <= len(s) <= TITLE_SWEET[1] else 0.0
+        return sim[i] + fit - _title_flaws(s)
+
+    return max(live, key=score)
+
+
 def _readable(row):
     """Заголовок уже читается: перевод лежит в кэше (русский от
     translate_worker или английский) или язык оригинала такой, что переводить
@@ -275,34 +398,6 @@ def _snippet(text, limit=260, lead=""):
     if len(out) > limit:
         out = text[:limit].rsplit(" ", 1)[0]
     return out.rstrip(" .,;:—-") + "…"
-
-
-def _paras(text, lead="", limit=2400):
-    """Текст статьи абзацами — то, что разворачивается под подводкой.
-
-    Обрывается по границе абзаца: половина фразы под свёрнутой подводкой хуже,
-    чем три абзаца вместо пяти. Совсем короткие тексты не отдаём вовсе — если
-    вся статья умещается в подводку, разворачивать нечего.
-    """
-    text = (text or "").strip()
-    if lead and text[:len(lead)].lower() == lead.lower():
-        text = text[len(lead):].lstrip(" .,:;—-–\n")
-    out, total = [], 0
-    for p in text.split("\n"):
-        p = _WS.sub(" ", p).strip()
-        if not p:
-            continue
-        if total + len(p) > limit:
-            # абзацев может не быть вовсе (текст пришёл одним куском) — тогда
-            # режем по слову, иначе под кнопкой окажется вся полоса целиком
-            if out:
-                break
-            p = p[:limit].rsplit(" ", 1)[0] + "…"
-        out.append(p)
-        total += len(p)
-        if total >= limit:
-            break
-    return out if total > 400 else []
 
 
 def _tier(score):
@@ -410,13 +505,38 @@ def stories(conn, rows, country, now):
         (url, title, text, pdate, fetched, _llm, _e, lang, t_en, x_en, _be, ents,
          t_ru, x_ru) = members[0]
         t_en, x_en = en.get(url, (t_en, x_en))
+        # Источники: по одному на издание, в порядке «полнее и весомее — выше»
+        # (см. source_rank). Раньше порядок повторял отбор головной статьи, то
+        # есть читаемость и дату, и первой в списке могла стоять заметка в
+        # четыре строки при развёрнутом репортаже третьим номером. Теперь это
+        # единственный выход из сюжета наружу — заголовок больше не ссылка, —
+        # и первая строка обязана вести туда, куда стоит идти.
+        rmap = reach(conn)
         sources, seen_domains = [], set()
         for m in members:
             d = imp.domain(m[0])
             if d and d not in seen_domains:
                 seen_domains.add(d)
-                sources.append({"domain": d, "url": _safe_url(m[0])})
+                sources.append({"domain": d, "url": _safe_url(m[0]), "head": False,
+                                "rank": source_rank(m[2], d, rmap)})
+        sources.sort(key=lambda s: s["rank"], reverse=True)
         by_url = {s["url"]: s["domain"] for s in sources}
+
+        # Заголовок — лучший среди заголовков всех источников сюжета, а не
+        # заголовок статьи-победителя (см. pick_title). Кандидат годится, только
+        # если его есть на чём показать: перевод в кэше или язык, который
+        # переводить нечего. Непереведённый китайский заголовок в русской ленте
+        # хуже любого неудачного русского.
+        import numpy as np
+        cands, tvecs = [], []
+        for m in members:
+            if m[0] == url:            # у головы перевод мог приехать только что
+                raw = t_ru or t_en or (title if (lang or "") in translate._SKIP_LANGS else "")
+            else:
+                raw = m[12] or m[8] or (m[1] if (m[7] or "") in translate._SKIP_LANGS else "")
+            cands.append(_clean_title(raw, imp.domain(m[0])) if raw else "")
+            tvecs.append(np.frombuffer(m[6], np.float32) if m[6] else None)
+        pick = pick_title(cands, tvecs)
         lines, updated = overview.resolve(
             conn, cached, key, [m[0] for m in members],
             [_ru_doc(m) for m in members])
@@ -430,9 +550,22 @@ def stories(conn, rows, country, now):
         # 0-100 — только для показа, столбик и ступень тона считают по ней.
         score = round(weight * 100)
         head = sources[0]["domain"] if sources else ""
-        clean = _clean_title(t_ru or t_en or title, head) or url
+        clean = (cands[pick] if pick is not None else "") or url
+        # Издание, чей заголовок выиграл отбор, помечается в списке источников:
+        # заголовок больше не ссылка, и иначе неоткуда узнать, чьими словами
+        # сюжет назван.
+        if pick is not None:
+            won = _safe_url(members[pick][0])
+            for src in sources:
+                if src["url"] == won:
+                    src["head"] = True
+                    break
         out.append({
-            "url": _safe_url(url),
+            # Адрес сюжета — у того издания, что возглавило список источников,
+            # а не у представителя кластера: рядом стоит `domain`, взятый
+            # оттуда же, и разойтись они не должны — подпись говорила бы одно,
+            # а ссылка вела в другое.
+            "url": sources[0]["url"] if sources else _safe_url(url),
             "title": clean,
             # оригинал показываем, только если он реально другой (был перевод)
             "orig_title": _clean_title(title, head) if (t_ru or t_en) and title else "",
@@ -441,7 +574,6 @@ def stories(conn, rows, country, now):
             "overview": over,
             "updated": updated,
             "snippet": _snippet(x_ru or x_en or text, lead=clean),
-            "body": _paras(x_ru or x_en or text, lead=clean),
             "lang": RU_LANG.get(lang, lang or ""),
             # для атрибута lang= — иначе скринридер и подбор шрифта считают
             # корейский заголовок русским текстом. Показываем язык ТОГО, что
@@ -585,8 +717,17 @@ def search_index(everything, regions, near=None):
         "g": [[r["slug"], r["name"],
                [ci[c["key"]] for c in r["countries"] if c["key"] in ci]]
               for r in regions],
+        # Подводка едет сюда обрезанной вдвое против страничной. Без неё
+        # карточки листалки со второй страницы состояли из одного заголовка —
+        # текст на витрине как будто пропадал, стоило перелистнуть. Полный
+        # обзор сюда не влезает: он у сюжета до трёх абзацев с подписями, это
+        # ещё два мегабайта на корпус ради того, что читатель откроет у
+        # единиц. Полторы строки — ровно столько, чтобы понять, о чём сюжет.
         "s": [[s["title"], ci[s["country"]], di[s["day"]], s["score"],
-               s["url"], s["domain"], ";".join(s["entities"])]
+               s["url"], s["domain"], ";".join(s["entities"]),
+               _snippet(s["snippet"] or (s["overview"][0]["text"] if s["overview"] else ""),
+                        limit=130),
+               s["outlets"]]
               for s in everything],
         # Похожие сюжеты — индексы в том же массиве s. Лежат здесь, а не в
         # разметке: показываются по требованию, и корпус к этому моменту уже
@@ -822,11 +963,11 @@ def build(out_dir=OUT_DIR):
            json.dumps(search_index(everything, regions, near),
                       ensure_ascii=False, separators=(",", ":")))
 
-    lead = everything[0] if everything else None
+    # Лид больше не отдельная переменная: первый сюжет идёт первой строкой той
+    # же ленты (см. index.html), а надпись над ним ставит feed().
     _write(os.path.join(out_dir, "index.html"),
            env.get_template("index.html").render(
-               lead=lead,
-               items=everything[1:HOME_LIMIT], total=len(everything),
+               items=everything[:HOME_LIMIT], total=len(everything),
                dots=map_dots(by_country), map_rest=BORDERS["rest"],
                map_w=MAP_W, map_h=MAP_H, map_grid=BORDERS["grid"], **ctx))
 
@@ -898,11 +1039,6 @@ def _selfcheck():
     assert not _snippet("Заголовок. Дальше.", lead="Заголовок").startswith("Заголовок")
     assert not _snippet(long_text + "x").endswith(".…")  # точка перед многоточием
 
-    assert _paras("") == [] and _paras(long_text[:300]) == []
-    body = _paras("Заголовок\n" + "\n".join([long_text] * 5), lead="Заголовок")
-    assert len(body) == 3 and not body[0].startswith("Заголовок")
-    assert sum(len(p) for p in body) <= 2400 + 1  # многоточие на срезе
-    assert _paras("слово " * 900)[0].endswith("…")  # текст одним куском
 
     # заголовок: склейка сам с собой + хвост издания, режется только по домену
     dup = ("China memory chipmaker CXMT's shares soar in a blockbuster listing"

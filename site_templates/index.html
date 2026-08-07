@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_story.html" import feed, tools, snippet, ents, sources, digest, akin, keep %}
+{% from "_story.html" import feed, tools %}
 {% from "_map.html" import radar %}
 {% set home = True %}
 
@@ -40,40 +40,11 @@
 <section class="board board--feed wrap">
   {{ tools(days, 'Тема, страна, имя или издание') }}
 
-  {% if lead %}
-  <article class="story story--lead" style="--w: {{ lead.score }}; --i: 0" data-tier="{{ lead.tier }}"
-           data-score="{{ lead.score }}" data-day="{{ lead.day }}"
-           data-find="{{ lead.title|lower }} {{ lead.country_ru|lower }} {{ lead.domain }}">
-    <div class="story__sig">
-      <span class="story__no">1</span>
-      {{ keep() }}
-    </div>
-
-    <div class="story__body">
-      <p class="lead__eyebrow">Верх {{ period_gen }}</p>
-      <h2 class="lead__title">
-        <a class="story__link" href="{{ lead.url }}" rel="noopener nofollow" {% if lead.lang_code %}lang="{{ lead.lang_code }}"{% endif %}>{{ lead.title }}</a>
-      </h2>
-
-      <p class="story__meta">
-        <span class="story__imp" title="Важность {{ lead.score }} из 100">
-          <i class="story__impbar" aria-hidden="true"></i>важность <b>{{ lead.score }}</b>
-        </span>
-        <a class="story__country" href="/c/{{ lead.country }}.html">{{ lead.country_ru }}</a>
-        {% if lead.outlets > 1 %}<span class="story__outlets">{{ lead.outlets }} {{ lead.outlets_word }}</span>{% endif %}
-        <time class="story__time" datetime="{{ lead.iso }}">{{ lead.ago }}</time>
-        {% if lead.translated %}<span class="story__tag">{{ 'пер. с ' ~ lead.lang if lead.lang else 'перевод' }}</span>{% endif %}
-      </p>
-
-      {{ digest(lead) }}
-      {{ snippet(lead) }}
-      {{ ents(lead.entities) }}
-      {{ sources(lead) }}
-      {{ akin(lead) }}
-    </div>
-  </article>
-  {% endif %}
-
-  {{ feed(items, True, 'За ' ~ period_acc ~ ' ничего не набралось.', 2, total) }}
+  {# Первый сюжет больше не набран крупно отдельной вёрсткой. Он стоял вне
+     ленты, и из-за этого листалка прокручивала к её началу — то есть мимо
+     него, ко второму сюжету. Теперь это обычная первая строка, а от лида
+     осталась только надпись над ней: важность и так подписана числом, а
+     двойной набор одного и того же сюжета ничего к ней не добавлял. #}
+  {{ feed(items, True, 'За ' ~ period_acc ~ ' ничего не набралось.', 1, total, 'Верх ' ~ period_gen) }}
 </section>
 {% endblock %}

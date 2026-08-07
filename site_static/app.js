@@ -17,6 +17,15 @@
     if (text != null) n.textContent = text;
     return n;
   };
+  // Те же три формы, что и в фильтре plural у Jinja: карточки листалки набраны
+  // здесь, а строки ленты — в шаблоне, и подписаны они обязаны быть одинаково.
+  var plural = function (n, one, few, many) {
+    var a = n % 100, b = n % 10;
+    if (a > 10 && a < 20) return many;
+    if (b === 1) return one;
+    if (b > 1 && b < 5) return few;
+    return many;
+  };
 
   // Полоса дат и фильтр по слову режут одну и ту же ленту, поэтому и решение
   // о показе строки принимается в одном месте. apply() объявлен здесь, чтобы
@@ -290,17 +299,9 @@
     });
 
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') {
-        if (root.classList.contains('is-find')) close();
-        else if (root.classList.contains('is-atlas')) setAtlas(false);
-        return;
-      }
-      var tag = (e.target.tagName || '').toLowerCase();
-      if (tag === 'input' || tag === 'textarea') return;
-      if (e.key === '/' || ((e.metaKey || e.ctrlKey) && e.key === 'k')) {
-        e.preventDefault();
-        open();
-      }
+      if (e.key !== 'Escape') return;
+      if (root.classList.contains('is-find')) close();
+      else if (root.classList.contains('is-atlas')) setAtlas(false);
     });
   }
 
@@ -420,8 +421,11 @@
   // Строка ленты → запись. Работает и для карточек из разметки, и для
   // хвостовых: у обеих одни и те же классы, других строк на витрине нет.
   var keptOf = function (art) {
-    var lnk = art && art.querySelector('.story__link');
-    if (!lnk) return null;
+    // Адрес головной статьи лежит в data-url: заголовок перестал быть ссылкой,
+    // а опознавать строку по-прежнему надо чем-то устойчивым.
+    var url = art && art.dataset && art.dataset.url;
+    var head = art && art.querySelector('.story__title');
+    if (!url || !head) return null;
     var cty = art.querySelector('.story__country');
     var when = art.querySelector('.story__time');
     var outlet = art.querySelector('.story__solo a, .story__sources a, .story__source');
@@ -429,8 +433,8 @@
     // страницы, и без неё запись в панели была бы безымянной.
     var ttl = document.body.dataset.country ? q$('.page__title') : null;
     return {
-      u: lnk.href,
-      t: lnk.textContent.trim(),
+      u: url,
+      t: head.textContent.trim(),
       c: cty ? cty.textContent.trim() : (ttl ? ttl.textContent.trim() : ''),
       s: outlet ? outlet.textContent.trim() : '',
       d: when ? (when.getAttribute('datetime') || '').slice(0, 10) : ''
@@ -451,9 +455,9 @@
 
   var keepMark = function (art) {
     var mb = art.querySelector('[data-keep]');
-    var ml = art.querySelector('.story__link');
+    var ml = art.dataset && art.dataset.url;
     if (!mb || !ml) return;
-    var isOn = !!keptSet[ml.href];
+    var isOn = !!keptSet[ml];
     mb.setAttribute('aria-pressed', isOn ? 'true' : 'false');
     mb.title = isOn ? 'Убрать из отложенного' : 'Отложить (клавиша s)';
     art.classList.toggle('is-kept', isOn);
@@ -551,9 +555,11 @@
   var akinBox = function (n) {
     var det = el('details', 'akin');
     det.dataset.akin = '';
-    var cap = el('summary', 'akin__sum', 'Похожие сюжеты');
-    cap.appendChild(el('b', null, n));
-    det.appendChild(cap);
+    // Подписан так же, как список источников этажом выше: сначала число,
+    // потом что считаем. Два соседних раскрытия у одной строки, набранные
+    // по-разному, читались как два разных механизма.
+    det.appendChild(el('summary', 'akin__sum',
+      n + ' ' + plural(n, 'похожий сюжет', 'похожих сюжета', 'похожих сюжетов')));
     var ol = el('ol', 'akin__list');
     ol.dataset.akinList = '';
     ol.appendChild(el('li', 'akin__wait', 'Ищем…'));
@@ -584,7 +590,7 @@
     if (det.dataset.akin === 'done') return;
     det.dataset.akin = 'done';
     var host = det.closest('.story');
-    var al = host && host.querySelector('.story__link');
+    var al = host && host.dataset && host.dataset.url;
     var slot = det.querySelector('[data-akin-list]');
     if (!al || !slot) return;
     loadCorpus().then(function (j) {
@@ -592,7 +598,7 @@
         akinAt = {};
         for (var i = 0; i < j.s.length; i++) akinAt[j.s[i][4]] = i;
       }
-      var at = akinAt[al.href];
+      var at = akinAt[al];
       var near = at == null ? [] : (j.k && j.k[at]) || [];
       slot.textContent = '';
       if (!near.length) {
@@ -610,92 +616,18 @@
         box2.classList.contains('akin')) akinFill(box2);
   }, true);
 
-  // ── Клавиши: чтение без мыши ──────────────────────────────────────────
-  // Одиночные буквы выключаются (WCAG 2.1.4 Character Key Shortcuts): у
-  // читателя с экранным диктором или речевым вводом буква уходит своей
-  // программе, а не странице. Выключатель — в самой справке, других настроек
-  // у витрины нет. Стрелки, Tab и Esc не выключаются никогда: без них
-  // страница вообще перестанет слушаться клавиатуры.
-  var HOT = 'hotkeys';
-  var hot = true;
-  try { hot = localStorage.getItem(HOT) !== 'off'; } catch (e) {}
-
-  var help = document.getElementById('help');
-  var hotBox = help && help.querySelector('[data-hotkeys]');
-
-  var setHelp = function (open) {
-    if (!help) return;
-    help.hidden = !open;
-    root.classList.toggle('is-help', open);
-    if (open) {
-      var x = help.querySelector('.help__close');
-      if (x) x.focus();
-    }
-  };
-
-  if (hotBox) {
-    hotBox.checked = hot;
-    hotBox.addEventListener('change', function () {
-      hot = hotBox.checked;
-      try { localStorage.setItem(HOT, hot ? 'on' : 'off'); } catch (e) {}
-    });
-  }
-  if (help) {
-    help.addEventListener('click', function (e) {
-      if (e.target === help || (e.target.closest && e.target.closest('.help__close'))) setHelp(false);
-    });
-  }
-
-  var typing = function (t) {
-    var tag = (t && t.tagName || '').toLowerCase();
-    return tag === 'input' || tag === 'textarea' || tag === 'select' ||
-      !!(t && t.isContentEditable);
-  };
-
-  // Фокус переносится на саму строку, а не на её ссылку: диктор тогда читает
-  // сюжет целиком — заголовок, важность, страну, — а не один заголовок.
-  var atStory = function () {
-    var a = document.activeElement;
-    return a && a.closest ? a.closest('.story') : null;
-  };
-
-  var step = function (d) {
-    var vis = all('.story').filter(function (n) { return !n.hidden; });
-    if (!vis.length) return;
-    var was2 = vis.indexOf(atStory());
-    var nx = was2 < 0 ? (d > 0 ? 0 : vis.length - 1) : was2 + d;
-    if (nx < 0 || nx >= vis.length) return;
-    var node = vis[nx];
-    node.tabIndex = -1;
-    node.focus({ preventScroll: true });
-    node.scrollIntoView({ block: 'center', behavior: calm.matches ? 'auto' : 'smooth' });
-  };
-
+  // ── Клавиши ───────────────────────────────────────────────────────────
+  // Осталось ровно две штуки: Esc закрывает открытое, стрелки листают ленту
+  // (см. листалку ниже). Одиночных букв — j/k/s/o/a/t/e/? — больше нет, и
+  // вместе с ними ушла справка о них и выключатель к ней. Каждая из них
+  // дублировала кнопку, которая и так на экране: отложить — кнопка слева от
+  // строки, атлас и тема — кнопки в шапке, источники — свой треугольник.
+  // Заодно снялся и повод для WCAG 2.1.4: правило про одиночные символы, а
+  // Esc и стрелки под него не подпадают.
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') {
-      if (help && !help.hidden) setHelp(false);
-      else if (keptBox && !keptBox.hidden) setKept(false);
-      return;                        // поиск и атлас закрывает свой обработчик
-    }
-    if (e.metaKey || e.ctrlKey || e.altKey || typing(e.target)) return;
-    if (e.key === '?') { e.preventDefault(); setHelp(true); return; }
-    if (!hot || root.classList.contains('is-find')) return;
-
-    var cur = atStory();
-    if (e.key === 'j') { e.preventDefault(); step(1); }
-    else if (e.key === 'k') { e.preventDefault(); step(-1); }
-    else if (e.key === 'o') { e.preventDefault(); setKept(keptBox && keptBox.hidden); }
-    else if (e.key === 'a' && atlasBtn) { e.preventDefault(); atlasBtn.click(); }
-    else if (e.key === 't') { e.preventDefault(); var th = q$('.theme'); if (th) th.click(); }
-    else if (!cur) return;
-    else if (e.key === 's') { e.preventDefault(); keptToggle(cur); }
-    else if (e.key === 'e') {
-      var full = cur.querySelector('.full');
-      if (full) { e.preventDefault(); full.open = !full.open; }
-    } else if (e.key === 'Enter' && document.activeElement === cur) {
-      var link = cur.querySelector('.story__link');
-      if (link) { e.preventDefault(); link.click(); }
-    }
+    if (e.key !== 'Escape') return;
+    if (keptBox && !keptBox.hidden) setKept(false);
+    // поиск и атлас закрывает свой обработчик
   });
 
   // ── Лента: фильтр и листалка ──────────────────────────────────────────
@@ -718,12 +650,15 @@
   var none = q$('.feed__none');
   var feedBox = q$('[data-feed]');
   var tailBox = q$('[data-feed-tail]');
-  var pgBox = q$('[data-pager]');
+  // Листалок две — над лентой и под ней, — поэтому список, а не один узел.
+  // Верхняя нужна на странице страны: сто строк не пролистать вниз ради того,
+  // чтобы понять, что дальше есть ещё сорок страниц.
+  var pagers = all('[data-pager]');
 
   if (stories.length && feedBox) {
-    var numsBox = pgBox && pgBox.querySelector('[data-pg-nums]');
-    var statBox2 = pgBox && pgBox.querySelector('[data-pg-stat]');
-    var sizeSel = pgBox && pgBox.querySelector('[data-pg-size]');
+    var eachPager = function (fn) { pagers.forEach(fn); };
+    var sizeSels = pagers.map(function (b) { return b.querySelector('[data-pg-size]'); })
+      .filter(Boolean);
 
     var total = +feedBox.dataset.total || stories.length;
     var withCountry = !('nocountry' in feedBox.dataset);
@@ -733,20 +668,19 @@
     // сборщик разводит сюжеты по числу изданий, а его в корпусе нет.
     var mine = {};
     stories.forEach(function (n) {
-      var a = n.querySelector('.story__link');
-      if (a) mine[a.href] = 1;
+      if (n.dataset.url) mine[n.dataset.url] = 1;
     });
 
     var tail = null, tailAsked = false;
     var size = 20, page = 0, turn = 1, drawn = false;
     try { size = +localStorage.getItem('pgsize') || 20; } catch (e) {}
     if ([20, 50, 100].indexOf(size) < 0) size = 20;
-    if (sizeSel) sizeSel.value = size;
+    sizeSels.forEach(function (sel) { sel.value = size; });
 
     var ensure = function () {
       if (tailAsked || total <= stories.length) return;
       tailAsked = true;
-      if (pgBox) pgBox.classList.add('is-loading');
+      eachPager(function (b) { b.classList.add('is-loading'); });
       loadCorpus().then(function (j) {
         var scope = scopeOf(j);
         tail = [];
@@ -756,7 +690,7 @@
           if (mine[s[4]]) continue;
           tail.push({ s: s, hay: j.hay[i], day: j.d[s[2]], at: i });
         }
-        if (pgBox) pgBox.classList.remove('is-loading');
+        eachPager(function (b) { b.classList.remove('is-loading'); });
         // теперь гистограмма считается по всей глубине, а не по сотне
         var per = {};
         stories.forEach(function (n) { per[n.dataset.day] = (per[n.dataset.day] || 0) + 1; });
@@ -782,13 +716,10 @@
       sig.appendChild(keepBtn());
       art.appendChild(sig);
 
+      art.dataset.url = s[4];
+
       var body = el('div', 'story__body');
-      var h = el('h3', 'story__title');
-      var a = el('a', 'story__link', s[0]);
-      a.href = s[4];
-      a.rel = 'noopener nofollow';
-      h.appendChild(a);
-      body.appendChild(h);
+      body.appendChild(el('h3', 'story__title', s[0]));
 
       var meta = el('p', 'story__meta');
       var imp = el('span', 'story__imp');
@@ -802,11 +733,13 @@
         c.href = '/c/' + CORPUS.c[s[1]][0] + '.html';
         meta.appendChild(c);
       }
-      meta.appendChild(el('span', 'story__source', s[5]));
+      if (s[8] > 1) meta.appendChild(el('span', 'story__outlets', s[8] + ' ' + plural(s[8], 'издание', 'издания', 'изданий')));
       var tm = el('time', 'story__time', dm(t.day));
       tm.dateTime = t.day;
       meta.appendChild(tm);
       body.appendChild(meta);
+
+      if (s[7]) body.appendChild(el('p', 'story__snippet', s[7]));
 
       var names = (s[6] || '').split(';').filter(Boolean).slice(0, 8);
       if (names.length) {
@@ -824,6 +757,18 @@
         });
         body.appendChild(ul);
       }
+      // Выход наружу. Заголовок ссылкой больше не бывает — ни здесь, ни в
+      // шаблоне, — а полного списка изданий в корпусе нет: у шести тысяч
+      // сюжетов это ещё полтора мегабайта адресов. Поэтому одна ссылка, на то
+      // издание, что возглавило список (см. source_rank в site.py); сколько
+      // изданий всего, сказано строкой выше.
+      var solo = el('p', 'story__solo');
+      var a = el('a', null, s[5]);
+      a.href = s[4];
+      a.rel = 'noopener nofollow';
+      solo.appendChild(a);
+      body.appendChild(solo);
+
       // Похожие — той же разметкой, что и у строк из шаблона: раскрытие и
       // заполнение делает общий обработчик, номер соседей уже под рукой.
       var near = CORPUS.k && CORPUS.k[t.at];
@@ -835,22 +780,47 @@
 
     // Номера страниц: края всегда, окно вокруг текущей, между ними — многоточие.
     // Триста девятнадцать кнопок подряд — это не листалка, а вторая лента.
+    //
+    // Многоточие — кнопка, а не подпись. Раньше между «1» и «17» лежал
+    // непроходимый провал: до девятой страницы можно было добраться только
+    // девятью нажатиями «дальше». Теперь нажатие на пропуск показывает
+    // страницу ровно посередине него, следующее — середину оставшейся
+    // половины: двоичный поиск руками, три-четыре нажатия до любой страницы
+    // из трёхсот, и строка при этом остаётся строкой.
+    var shownPages = 1, opened = {};
+
+    var gap = function (a, b) {
+      var mid = a + ((b - a) >> 1);
+      var n = el('button', 'pager__gap', '…');
+      n.type = 'button';
+      n.title = 'Показать страницу ' + (mid + 1);
+      n.setAttribute('aria-label', 'Показать страницу ' + (mid + 1));
+      n.addEventListener('click', function () { opened[mid] = 1; nums(shownPages); });
+      return n;
+    };
+
     var nums = function (pages) {
-      numsBox.textContent = '';
-      var want = {}, i;
+      shownPages = pages;
+      var want = {}, i, o;
       want[0] = want[pages - 1] = 1;
       for (i = page - 1; i <= page + 1; i++) if (i >= 0 && i < pages) want[i] = 1;
+      for (o in opened) if (+o > 0 && +o < pages) want[+o] = 1;
       var keys = Object.keys(want).map(Number).sort(function (a, b) { return a - b; });
-      keys.forEach(function (p, k) {
-        if (k && p - keys[k - 1] > 1) numsBox.appendChild(el('span', 'pager__gap', '…'));
-        var b = el('button', 'pager__num', p + 1);
-        b.type = 'button';
-        if (p === page) {
-          b.className += ' is-here';
-          b.setAttribute('aria-current', 'page');
-        }
-        b.addEventListener('click', function () { go(p); });
-        numsBox.appendChild(b);
+      eachPager(function (box) {
+        var slot = box.querySelector('[data-pg-nums]');
+        if (!slot) return;
+        slot.textContent = '';
+        keys.forEach(function (p, k) {
+          if (k && p - keys[k - 1] > 1) slot.appendChild(gap(keys[k - 1], p));
+          var b = el('button', 'pager__num', p + 1);
+          b.type = 'button';
+          if (p === page) {
+            b.className += ' is-here';
+            b.setAttribute('aria-current', 'page');
+          }
+          b.addEventListener('click', function () { go(p); });
+          slot.appendChild(b);
+        });
       });
     };
 
@@ -908,18 +878,20 @@
       var shown = Math.min(to, found) - from;
       if (counter) counter.textContent = narrowed ? found + ' из ' + total : '';
       if (none) none.hidden = found > 0;
-      if (pgBox) {
-        pgBox.hidden = pages < 2;
+      if (pagers.length) {
         nums(pages);
-        Array.prototype.forEach.call(pgBox.querySelectorAll('[data-pg]'), function (b) {
-          var p = page + (+b.dataset.pg);
-          b.disabled = p < 0 || p >= pages;
+        var stat = shown > 0
+          ? (from + 1) + '–' + (from + shown) + ' из ' + found
+          : 'страница пуста';
+        eachPager(function (box) {
+          box.hidden = pages < 2;
+          Array.prototype.forEach.call(box.querySelectorAll('[data-pg]'), function (b) {
+            var p = page + (+b.dataset.pg);
+            b.disabled = p < 0 || p >= pages;
+          });
+          var st = box.querySelector('[data-pg-stat]');
+          if (st) st.textContent = stat;
         });
-        if (statBox2) {
-          statBox2.textContent = shown > 0
-            ? (from + 1) + '–' + (from + shown) + ' из ' + found
-            : 'страница пуста';
-        }
       }
       drawn = true;
     };
@@ -961,24 +933,28 @@
     };
 
     if (word) word.addEventListener('input', apply);
-    if (pgBox) {
-      Array.prototype.forEach.call(pgBox.querySelectorAll('[data-pg]'), function (b) {
+    eachPager(function (box) {
+      Array.prototype.forEach.call(box.querySelectorAll('[data-pg]'), function (b) {
         b.addEventListener('click', function () { go(page + (+b.dataset.pg)); });
       });
-      if (sizeSel) sizeSel.addEventListener('change', function () {
+    });
+    sizeSels.forEach(function (sel) {
+      sel.addEventListener('change', function () {
         var was = page * size;
-        size = +sizeSel.value;
+        size = +sel.value;
+        // вторая листалка — та же настройка, и показывать она должна то же
+        sizeSels.forEach(function (o) { o.value = size; });
         try { localStorage.setItem('pgsize', size); } catch (e) {}
         go(Math.floor(was / size));
       });
-    }
+    });
 
     draw();
 
     // Стрелки листают ленту, когда набирать некуда: ← и → у страницы, к
     // которой и так пришли читать подряд.
     document.addEventListener('keydown', function (e) {
-      if (e.metaKey || e.ctrlKey || e.altKey || !pgBox || pgBox.hidden) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || !pagers.length || pagers[0].hidden) return;
       var tag = (e.target.tagName || '').toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
       if (root.classList.contains('is-find') || root.classList.contains('is-atlas')) return;
@@ -1078,16 +1054,6 @@
     field.addEventListener('focusout', hide);
   }
 
-  // ── Свернуть текст снизу ──────────────────────────────────────────────
-  // Второй <summary> в <details> невозможен, а дочитавшему до конца незачем
-  // листать к началу, чтобы закрыть. Три строки вместо своего аккордеона.
-  document.addEventListener('click', function (e) {
-    var b = e.target.closest ? e.target.closest('[data-close-full]') : null;
-    if (!b) return;
-    var box = b.closest('details');
-    box.open = false;
-    box.querySelector('summary').scrollIntoView({ block: 'nearest' });
-  });
 
   // ── Проявление при прокрутке там, где нет CSS-таймлайнов ──────────────
   // В Chromium всё движение считает CSS (animation-timeline: view()), и сюда
@@ -1104,7 +1070,7 @@
         eye.unobserve(r.target);
       });
     }, { rootMargin: '0px 0px -8% 0px' });
-    all('.story:not(.story--lead), .chips__item, .who__list li, .rmap')
+    all('.story, .chips__item, .who__list li, .rmap')
       .forEach(function (n) { eye.observe(n); });
   }
 

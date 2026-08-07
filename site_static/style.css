@@ -370,14 +370,6 @@ a { color: inherit; }
 
 .jump__word { overflow: hidden; text-overflow: ellipsis; }
 
-.jump__kbd {
-  flex: none;
-  padding: 0.0625rem 0.3125rem;
-  border: 1px solid var(--console-rule);
-  border-radius: var(--r);
-  font: 400 0.6875rem/1.4 var(--font-data);
-}
-@media (max-width: 60rem) { .jump__kbd { display: none; } }
 @media (max-width: 44rem) {
   .jump__word { position: absolute; left: -9999px; }
   .jump { padding-inline: 0.5rem; }
@@ -610,48 +602,26 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
    Развёрнутого атласа на главной больше нет: 89 стран строками занимали
    три экрана до первой новости. Атлас остался кнопкой в шапке — она видна
    на каждой странице. */
-.story--lead {
-  padding-block: clamp(1.5rem, 3.5vw, 2.5rem) clamp(1.25rem, 3vw, 2rem);
-}
-
-.lead__eyebrow {
+/* Надпись над первой строкой. Крупного лида на главной больше нет: он стоял
+   вне ленты, из-за чего листалка прокручивала мимо него, и набирал один и тот
+   же сюжет дважды — плакатом и строкой. Осталась подпись. Штрих окрашен
+   ступенью сюжета: ярлык показывает ту же величину, что и заливка под ним. */
+.story__eyebrow {
   display: flex;
   align-items: center;
-  gap: 0.5625rem;
-  margin: 0 0 0.875rem;
-  font: 500 0.6875rem/1 var(--font-data);
+  gap: 0.5rem;
+  margin: 0 0 0.4375rem;
+  font: 500 0.625rem/1 var(--font-data);
   text-transform: uppercase;
   letter-spacing: 0.16em;
   color: var(--ink-2);
 }
-/* Штрих окрашен ступенью самого сюжета: подпись показывает ту же величину,
-   что и заливка под ней. */
-.lead__eyebrow::before {
+.story__eyebrow::before {
   content: '';
-  width: 1.5rem;
+  width: 1.25rem;
   height: 2px;
   background: var(--tier);
 }
-
-/* Плакатный вес 900: заголовок держит весь верх страницы один. Мера в
-   24 знака не даёт ему растечься в строку на весь экран. */
-.lead__title {
-  margin: 0;
-  max-width: 24ch;
-  font: 900 clamp(1.625rem, 4vw, 2.875rem)/1.04 var(--font-display);
-  letter-spacing: -0.04em;
-  text-wrap: balance;
-  overflow-wrap: anywhere;
-}
-
-.story--lead .story__meta { margin-top: 0.75rem; font-size: 0.8125rem; }
-.story--lead .full,
-.story--lead .story__snippet { margin-top: 0.875rem; max-width: 54ch; }
-.story--lead .full__sum,
-.story--lead .over__line,
-.story--lead .story__snippet { font-size: 1.0625rem; }
-.story--lead .over { margin-top: 0.875rem; max-width: 56ch; }
-.story--lead .story__no { font-size: clamp(1.125rem, 2.4vw, 1.5rem); }
 
 /* ── Объекты сюжета ───────────────────────────────────────────────────── */
 /* Кнопки, а не подпись: имя ищется по всему корпусу архива, на странице
@@ -683,82 +653,6 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
   border-color: var(--accent);
   transform: translateY(-1px);
 }
-
-/* ── Полный текст статьи ──────────────────────────────────────────────── */
-/* Кнопки «читать целиком» тут нет: кнопка — сама подводка, её многоточие и
-   есть обещание продолжения. Открытая, она уступает место тексту, а вместо
-   себя оставляет строку «свернуть» — иначе первые два абзаца стояли бы на
-   экране дважды. Всё на <details>, без единой строки JS. */
-.full {
-  margin-top: 0.625rem;
-  max-width: 60ch;
-}
-.full__sum {
-  font-size: 0.9375rem;
-  color: var(--ink-2);
-  cursor: pointer;
-  list-style: none;
-  transition: color 0.12s;
-}
-.full__sum::-webkit-details-marker { display: none; }
-.full__sum:hover { color: var(--ink); }
-/* Знак раскрытия — маленький треугольник вплотную к многоточию, а не
-   подчёркивание всей подводки: подчёркнутый абзац в каждой из ста строк
-   читается как сплошная ссылка. */
-.full__cut::after {
-  content: '▾';
-  margin-inline-start: 0.25em;
-  font-size: 0.75em;
-  color: var(--ink-3);
-}
-.full__sum:hover .full__cut::after { color: var(--ink); }
-
-.full__less {
-  display: none;
-  font: 400 0.75rem/1 var(--font-data);
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--ink-3);
-}
-.full[open] .full__cut { display: none; }
-.full[open] .full__less { display: inline-block; }
-
-.full__text {
-  margin-top: 0.75rem;
-  padding-inline-start: 0.9375rem;
-  border-inline-start: 2px solid var(--tier);
-  font-size: 0.9375rem;
-  color: var(--ink-2);
-}
-.full__text p { margin: 0 0 0.75rem; }
-/* Подвал раскрытого текста: выход на издание и вторая кнопка сворачивания.
-   Одна, наверху, заставляла дочитавшего листать обратно к началу. */
-.full__out {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 0;
-  padding-top: 0.5rem;
-  border-top: 1px solid var(--rule);
-  font: 400 0.75rem var(--font-data);
-  color: var(--ink-3);
-}
-.full__hide {
-  flex: none;
-  padding: 0.1875rem 0.5rem;
-  background: transparent;
-  color: var(--ink-3);
-  border: 1px solid var(--rule);
-  border-radius: var(--r);
-  font: 400 0.6875rem/1.3 var(--font-data);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  cursor: pointer;
-  transition: color 0.14s, border-color 0.14s, background 0.14s;
-}
-.full__hide:hover { color: var(--ink); border-color: var(--accent); background: var(--panel); }
-
 
 /* ── Главная: заголовок витрины и карта охвата ────────────────────────── */
 /* Витрина открывалась лидом без единого слова о себе: кто попал сюда со
@@ -1195,7 +1089,7 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
    Проявление при прокрутке от этого не страдает: строка становится «нужной» за
    полэкрана до появления, то есть раньше, чем начнётся её диапазон entry.
    auto в contain-intrinsic-size: первая мера настоящая, дальше помнится. */
-.story:not(.story--lead) {
+.story {
   content-visibility: auto;
   contain-intrinsic-size: auto 12rem;
 }
@@ -1236,11 +1130,10 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
   animation-delay: calc(var(--i, 0) * 20ms);
 }
 .story:has(.story__sig):hover::before { filter: saturate(1.25) contrast(1.06); }
-/* Подаётся заголовок, а не вся строка: transform на .story занят проявлением
-   при прокрутке (см. блок «Движение» внизу), и два владельца одного свойства
-   гасили бы друг друга. */
-.story__title { transition: transform 0.16s cubic-bezier(0.16, 0.84, 0.28, 1); }
-.story:hover .story__title { transform: translateX(3px); }
+/* Строка больше никуда не ведёт — заголовок стал обычным текстом, — и подача
+   заголовка вперёд по наведению обещала бы нажатие, которого нет. Осталась
+   только подсветка заливки: она говорит «строка под курсором», а не «щёлкни
+   сюда». Выходы наружу — в источниках, и там они подчёркнуты как ссылки. */
 
 /* Слева — порядковый номер, и только он: «96» на этом месте читалось как
    номер строки. Важность подписана словом ниже, в выходных данных. */
@@ -1267,8 +1160,6 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
   text-wrap: pretty;
   overflow-wrap: anywhere;
 }
-.story__link { text-decoration: none; }
-.story__link:hover { box-shadow: inset 0 -1px 0 var(--ink); }
 
 .story__meta {
   display: flex;
@@ -1315,9 +1206,8 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
 
 /* ── Обзор сюжета ─────────────────────────────────────────────────────────
    Два-три предложения из РАЗНЫХ изданий (см. overview.py и макрос digest).
-   Полоска слева цветом ступени важности — та же, что у развёрнутого текста
-   статьи (.full__text): одинаковая пометка у одинакового по смыслу — «это
-   содержание сюжета, а не служебная строка». */
+   Полоска слева цветом ступени важности помечает содержание сюжета — в
+   отличие от служебных строк вокруг, набранных приборным моноширинным. */
 .over {
   margin-top: 0.625rem;
   padding-inline-start: 0.9375rem;
@@ -1390,9 +1280,11 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
   color: var(--ink-3);
 }
 
-/* Хвост архива. Карточки те же, только без подводки и без полного текста: в
-   корпусе (search.json) их нет, а выдумывать нечего. Верхнего волоска у
-   первой строки хвоста быть не должно — она продолжает ту же ленту. */
+/* Хвост архива. Карточки те же, только подводка короче и издание одно: в
+   корпусе (search.json) лежат полторы строки текста и адрес головного
+   источника, весь обзор и весь список изданий туда не влезают. Верхнего
+   волоска у первой строки хвоста быть не должно — она продолжает ту же
+   ленту. */
 .feed--tail { margin-top: 0; }
 .feed--tail .story:first-child { border-top: 1px solid var(--rule); }
 .feed:not(.feed--tail) .story:last-child { border-bottom: 0; }
@@ -1411,6 +1303,14 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
   margin-top: 1.25rem;
   padding-top: 1rem;
   border-top: 1px solid var(--rule);
+}
+/* Верхняя копия — та же листалка, только волосок под ней, а не над: она
+   заканчивает шапку ленты, а не подводит ей итог. */
+.pager--top {
+  margin: 0 0 1rem;
+  padding: 0 0 0.875rem;
+  border-top: 0;
+  border-bottom: 1px solid var(--rule);
 }
 .pager__nums { display: flex; gap: 0.25rem; }
 .pager__num, .pager__step {
@@ -1434,7 +1334,20 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
   color: var(--panel);
 }
 .pager__step:disabled { opacity: 0.35; cursor: default; }
-.pager__gap { padding: 0 0.125rem; color: var(--ink-3); }
+/* Многоточие — кнопка: раскрывает страницу посередине пропуска (см. gap в
+   app.js). Набрано как подпись, а ведёт себя как кнопка, поэтому подчёркнутое
+   пунктиром — иначе о нажатии никто не догадается. */
+.pager__gap {
+  padding: 0 0.125rem;
+  background: none;
+  border: 0;
+  color: var(--ink-3);
+  font: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.pager__gap:hover { color: var(--ink); }
 
 .pager__size {
   display: flex;
@@ -2008,7 +1921,7 @@ body[data-region='southern_africa'] {
 }
 .kept-btn__n { font-variant-numeric: tabular-nums; }
 
-.kept, .help {
+.kept {
   position: fixed;
   inset: 0;
   z-index: 50;
@@ -2020,7 +1933,7 @@ body[data-region='southern_africa'] {
   overflow: auto;
   overscroll-behavior: contain;
 }
-.kept__panel, .help__panel {
+.kept__panel {
   width: min(38rem, 100%);
   padding: 1.25rem;
   background: var(--surface);
@@ -2029,18 +1942,18 @@ body[data-region='southern_africa'] {
   box-shadow: 0 1.5rem 3rem rgb(0 0 0 / 35%);
   animation: rise 0.4s var(--spring) both;
 }
-.kept__head, .help__head {
+.kept__head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 0.375rem;
 }
-.kept__ttl, .help__ttl {
+.kept__ttl {
   font: 700 1.0625rem var(--font-display);
   letter-spacing: -0.02em;
 }
-.kept__close, .help__close {
+.kept__close {
   flex: none;
   background: none;
   border: 0;
@@ -2048,9 +1961,9 @@ body[data-region='southern_africa'] {
   font: 400 1.25rem/1 var(--font-data);
   cursor: pointer;
 }
-.kept__close:hover, .help__close:hover { color: var(--ink); }
+.kept__close:hover { color: var(--ink); }
 
-.kept__note, .kept__empty, .help__why {
+.kept__note, .kept__empty {
   margin: 0 0 0.875rem;
   font: 400 0.8125rem/1.45 var(--font-data);
   color: var(--ink-3);
@@ -2106,48 +2019,9 @@ body[data-region='southern_africa'] {
 }
 .kept__clear:hover { border-color: var(--ink-3); color: var(--ink); }
 
-/* ── Клавиши ──────────────────────────────────────────────────────────── */
-.help__list {
-  margin: 0.875rem 0 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0.375rem 1rem;
-}
-.help__row {
-  display: grid;
-  grid-template-columns: 6.5rem minmax(0, 1fr);
-  gap: 0.75rem;
-  align-items: baseline;
-}
-.help__row dt { display: flex; gap: 0.25rem; }
-.help__row dd {
-  margin: 0;
-  font: 400 0.875rem var(--font-data);
-  color: var(--ink-2);
-}
-.help kbd,
-.kept kbd {
-  display: inline-block;
-  min-width: 1.5rem;
-  padding: 0.125rem 0.3125rem;
-  background: var(--panel-sunk);
-  border: 1px solid var(--rule-strong);
-  border-radius: var(--r);
-  font: 500 0.75rem var(--font-data);
-  text-align: center;
-}
-.help__off {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-top: 1.125rem;
-  font: 400 0.8125rem var(--font-data);
-  cursor: pointer;
-}
-.help__why { margin: 0.375rem 0 0; }
-
-/* Сюжет под клавишами j/k получает фокус сам — иначе диктор читал бы одну
-   ссылку заголовка вместо строки целиком. Обводка идёт по всей строке. */
+/* Строка получает обводку целиком, а не по заголовку: заголовок больше не
+   ссылка, и фокус приходит на саму строку — диктор читает сюжет, а не одно
+   имя. */
 .story:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 4px;
@@ -2155,19 +2029,13 @@ body[data-region='southern_africa'] {
 
 /* ── Похожие сюжеты ───────────────────────────────────────────────────── */
 .akin { margin-top: 0.375rem; }
+/* Ровно то же, что и .story__summary этажом выше: два раскрытия у одной
+   строки — источники и похожие — обязаны выглядеть одним механизмом. */
 .akin__sum {
-  display: flex;
-  align-items: baseline;
-  gap: 0.375rem;
   width: fit-content;
   font: 400 0.75rem var(--font-data);
   color: var(--ink-3);
   cursor: pointer;
-}
-.akin__sum b {
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  opacity: 0.7;
 }
 .akin__list {
   margin: 0.5rem 0 0;
@@ -2192,18 +2060,6 @@ body[data-region='southern_africa'] {
   color: var(--ink-3);
 }
 .akin__wait { font: 400 0.75rem var(--font-data); color: var(--ink-3); }
-
-/* ── Фиды страны ──────────────────────────────────────────────────────── */
-.page__rss {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.25rem 0.75rem;
-  margin: 0.5rem 0 0;
-  font: 400 0.75rem var(--font-data);
-  color: var(--ink-3);
-}
-.page__rsslink { color: var(--ink-2); }
 
 @keyframes rise {
   from { opacity: 0; transform: translateY(12px); }
@@ -2255,7 +2111,7 @@ body[data-region='southern_africa'] {
        прозрачность и сдвиг, и ими может распоряжаться transition — иначе
        строка, спрятанная фильтром, гасла бы рывком, потому что анимация
        всегда бьёт переход. Видимой разницы нет: конечный кадр и есть базовый. */
-    .story:not(.story--lead), .chips__item, .who__list li {
+    .story, .chips__item, .who__list li {
       animation: rise linear backwards;
       animation-timeline: view();
       animation-range: entry 0% entry 38%;
@@ -2305,7 +2161,7 @@ body[data-region='southern_africa'] {
    лента просто возникала целиком, и витрина выглядела мёртвой ровно у
    половины читателей. */
 @media (prefers-reduced-motion: no-preference) {
-  html.no-tl .story:not(.story--lead),
+  html.no-tl .story,
   html.no-tl .chips__item,
   html.no-tl .who__list li,
   html.no-tl .rmap {
@@ -2320,12 +2176,11 @@ body[data-region='southern_africa'] {
    только появился, — и без этого лид, крошки и пульт единственные на витрине
    возникали рывком. Здесь движение по времени, лесенкой сверху вниз. */
 @media (prefers-reduced-motion: no-preference) {
-  .crumbs, .page__head, .tools, .story--lead, .chips, .who {
+  .crumbs, .page__head, .tools, .chips, .who {
     animation: rise 0.7s cubic-bezier(0.16, 0.84, 0.28, 1) backwards;
   }
   .page__head { animation-delay: 0.05s; }
   .chips, .who, .tools { animation-delay: 0.11s; }
-  .story--lead { animation-delay: 0.17s; }
 
   /* Страны проступают на карте волной от шумных к тихим — тем же порядком, в
      котором их выдал сборщик. Только прозрачность: transform у фигуры внутри
@@ -2340,7 +2195,7 @@ body[data-region='southern_africa'] {
      Chromium), узел просто открывается сразу, как и открывался. */
   @supports (interpolate-size: allow-keywords) {
     :root { interpolate-size: allow-keywords; }
-    .full::details-content, .tools::details-content, .story__more::details-content {
+    .akin::details-content, .tools::details-content, .story__more::details-content {
       block-size: 0;
       overflow: clip;
       opacity: 0;
@@ -2350,7 +2205,7 @@ body[data-region='southern_africa'] {
                   overflow 0.32s allow-discrete;
       transition-behavior: allow-discrete;
     }
-    .full[open]::details-content,
+    .akin[open]::details-content,
     .tools[open]::details-content,
     .story__more[open]::details-content { block-size: auto; opacity: 1; }
     /* Раскрытому узлу клип больше не нужен, а подсказкам фильтра он мешает:
@@ -2366,13 +2221,13 @@ body[data-region='southern_africa'] {
    прежде, чем узел исчезнет. @starting-style закрывает обратный ход: у узла,
    пришедшего из display:none, иначе нет состояния, из которого ехать. */
 @media (prefers-reduced-motion: no-preference) {
-  .feed .story, .story--lead, .feed__none, .days__reset, .filter__sugg,
+  .feed .story, .feed__none, .days__reset, .filter__sugg,
   .find__groups, .find__tags, .find__seeds {
     transition: opacity 0.22s ease,
                 transform 0.22s cubic-bezier(0.16, 0.84, 0.28, 1),
                 display 0.22s allow-discrete;
   }
-  :is(.feed .story, .story--lead, .feed__none, .days__reset, .filter__sugg,
+  :is(.feed .story, .feed__none, .days__reset, .filter__sugg,
       .find__groups, .find__tags, .find__seeds)[hidden] {
     opacity: 0;
     transform: translateY(-0.375rem);
@@ -2886,7 +2741,7 @@ html.is-theming::view-transition-new(root) {
 
 @media print {
   .top, .foot, .tools, .theme, .atlas, .atlas__scrim, .find,
-  .kept, .help, .keep, .akin { display: none; }
+  .kept, .keep, .akin { display: none; }
   body { background: #fff; color: #000; margin: 0; }
   body[data-region]::before, body[data-region]::after,
   body[data-home]::before, body[data-home]::after { display: none; }

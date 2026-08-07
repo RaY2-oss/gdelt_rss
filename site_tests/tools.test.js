@@ -1,6 +1,7 @@
-// Приборы шага 4 на настоящей собранной странице: закладки, похожие сюжеты,
-// клавиатура. Проверяется то, что ломается молча, — хранилище переживает
-// перезагрузку, соседи берутся из корпуса, клавиши не срабатывают в поле ввода.
+// Приборы на настоящей собранной странице: закладки, похожие сюжеты, клавиши.
+// Проверяется то, что ломается молча, — хранилище переживает перезагрузку,
+// соседи берутся из корпуса, а строка опознаётся по data-url: заголовок
+// больше не ссылка, и адрес живёт в самом <article>.
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
@@ -59,7 +60,7 @@ const key = (w, k, target) => {
     const mem = store();
     const { w, d } = boot('index.html', mem);
     const art = d.querySelector('.story');
-    const url = art.querySelector('.story__link').href;
+    const url = art.dataset.url;
 
     assert.equal(d.querySelector('.kept-btn').hidden, true, 'пустой счётчик виден');
     art.querySelector('[data-keep]').click();
@@ -107,8 +108,9 @@ const key = (w, k, target) => {
 
     const det = d.querySelector('.akin');
     assert.ok(det, 'ни у одного сюжета в разметке нет блока похожих');
-    const want = +det.querySelector('.akin__sum b').textContent;
-    assert.ok(want > 0, 'счётчик соседей пуст');
+    // Подписано как источники: «N похожих сюжетов», число первым словом.
+    const want = +det.querySelector('.akin__sum').textContent.trim().split(' ')[0];
+    assert.ok(want > 0, 'счётчик соседей пуст: ' + det.querySelector('.akin__sum').textContent);
     assert.equal(det.querySelectorAll('.akin__link').length, 0, 'список набит заранее');
 
     // toggle не всплывает — обработчик ловит его на перехвате; здесь это
@@ -121,7 +123,7 @@ const key = (w, k, target) => {
     assert.equal(rows.length, want, 'нарисовано ' + rows.length + ' из ' + want);
 
     // Ровно те соседи, что посчитал build, и в том же порядке.
-    const url = det.closest('.story').querySelector('.story__link').href;
+    const url = det.closest('.story').dataset.url;
     const me = j.s.findIndex((s) => s[4] === url);
     assert.ok(me >= 0, 'сюжет не нашёлся в корпусе');
     assert.deepEqual([...rows].map((a) => a.href), j.k[me].map((i) => j.s[i][4]),
@@ -138,71 +140,45 @@ const key = (w, k, target) => {
   }
 
   // ── Клавиши ──────────────────────────────────────────────────────────────
+  // Их осталось две: Esc и стрелки. Буквы (j/k/s/o/a/t/e/?) сняты вместе со
+  // справкой о них — каждая дублировала кнопку, которая и так на экране, —
+  // поэтому проверяем ровно обратное прежнему: что буква НЕ делает ничего.
   {
     const mem = store();
     const { w, d } = boot('index.html', mem);
     const arts = [...d.querySelectorAll('.story')];
 
-    key(w, 'j');
-    assert.equal(d.activeElement, arts[0], 'j не встал на первый сюжет');
-    key(w, 'j');
-    assert.equal(d.activeElement, arts[1], 'j не пошёл дальше');
-    key(w, 'k');
-    assert.equal(d.activeElement, arts[0], 'k не вернулся');
-    key(w, 'k');
-    assert.equal(d.activeElement, arts[0], 'k уехал выше первого');
+    assert.equal(d.getElementById('help'), null, 'справка о клавишах осталась в разметке');
 
-    // s кладёт в отложенное тот сюжет, на котором стоим.
-    key(w, 's', arts[0]);
-    assert.equal(JSON.parse(mem.getItem('kept'))[0].u,
-      arts[0].querySelector('.story__link').href, 's отложил не тот сюжет');
+    ['j', 'k', 's', 'o', 'a', 't', 'e', '?'].forEach((k) => {
+      const ev = key(w, k, arts[0]);
+      assert.equal(ev.defaultPrevented, false, 'буква ' + k + ' всё ещё перехвачена');
+    });
+    assert.equal(mem.getItem('kept'), null, 'буква что-то отложила');
+    assert.equal(d.activeElement, d.body, 'буква увела фокус');
 
-    // e раскрывает обзор.
-    const full = arts[0].querySelector('.full');
-    if (full) {
-      key(w, 'e', arts[0]);
-      assert.equal(full.open, true, 'e не раскрыл обзор');
-      key(w, 'e', arts[0]);
-      assert.equal(full.open, false, 'e не свернул обзор');
-    }
-
-    // o открывает и закрывает отложенное, ? — справку, Esc закрывает.
-    key(w, 'o');
-    assert.equal(d.getElementById('kept').hidden, false, 'o не открыл отложенное');
+    // Esc закрывает открытое. Открываем список отложенного кнопкой в шапке —
+    // единственным оставшимся способом.
+    arts[0].querySelector('[data-keep]').click();
+    d.querySelector('.kept-btn').click();
+    assert.equal(d.getElementById('kept').hidden, false, 'кнопка не открыла отложенное');
     key(w, 'Escape');
     assert.equal(d.getElementById('kept').hidden, true, 'Esc не закрыл отложенное');
-    key(w, '?');
-    assert.equal(d.getElementById('help').hidden, false, '? не открыл справку');
-    key(w, 'Escape');
-    assert.equal(d.getElementById('help').hidden, true, 'Esc не закрыл справку');
 
-    // WCAG 2.1.4: в поле ввода одиночные клавиши молчат.
-    const inp = d.querySelector('.tools__inp, input[type=search], input[type=text]');
-    assert.ok(inp, 'на странице нет поля ввода — проверять нечего');
-    const was = d.activeElement;
-    const ev = key(w, 'j', inp);
-    assert.equal(ev.defaultPrevented, false, 'j перехвачена в поле ввода');
-    assert.equal(d.activeElement, was, 'j увела фокус из поля ввода');
-
-    // Выключатель в справке гасит всё, кроме самой справки.
-    key(w, '?');
-    const sw = d.querySelector('[data-hotkeys]');
-    sw.checked = false;
-    sw.dispatchEvent(new w.Event('change', { bubbles: true }));
-    key(w, 'Escape');
-    assert.equal(mem.getItem('hotkeys'), 'off', 'выключатель не запомнился');
-    d.activeElement.blur();
-    key(w, 'j');
-    assert.notEqual(d.activeElement, arts[0], 'j работает при выключенных клавишах');
-    assert.equal(key(w, '?').defaultPrevented, true, '? тоже отключилась');
+    // Стрелки листают ленту — и только вне поля ввода.
+    const pg = d.querySelector('[data-pager]');
+    if (pg && !pg.hidden) {
+      assert.equal(key(w, 'ArrowRight').defaultPrevented, true, '→ не листает');
+      const inp = d.querySelector('input[type=search], input[type=text]');
+      assert.ok(inp, 'на странице нет поля ввода — проверять нечего');
+      assert.equal(key(w, 'ArrowRight', inp).defaultPrevented, false,
+        '→ перехвачена в поле ввода');
+    }
+    // Стрелка запускает подтягивание архива; окно нельзя закрывать, пока
+    // обещание не отработало, — иначе оно доедет уже в мёртвый документ.
+    await wait(); await wait();
     w.close();
-
-    // Выключено — значит выключено и на следующей странице.
-    const two = boot('index.html', mem);
-    key(two.w, 'j');
-    assert.equal(two.d.activeElement, two.d.body, 'запрет не пережил перезагрузку');
-    two.w.close();
-    console.log('ok  клавиши: j/k/s/e/o/?/Esc, молчание в поле ввода, выключатель');
+    console.log('ok  клавиши: буквы сняты, Esc закрывает, стрелки листают');
   }
 
   console.log('\ntools ok');
