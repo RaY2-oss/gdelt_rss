@@ -648,7 +648,9 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
 .story--lead .full,
 .story--lead .story__snippet { margin-top: 0.875rem; max-width: 54ch; }
 .story--lead .full__sum,
+.story--lead .over__line,
 .story--lead .story__snippet { font-size: 1.0625rem; }
+.story--lead .over { margin-top: 0.875rem; max-width: 56ch; }
 .story--lead .story__no { font-size: clamp(1.125rem, 2.4vw, 1.5rem); }
 
 /* ── Объекты сюжета ───────────────────────────────────────────────────── */
@@ -1310,6 +1312,65 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
   font-size: 0.9375rem;
   color: var(--ink-2);
 }
+
+/* ── Обзор сюжета ─────────────────────────────────────────────────────────
+   Два-три предложения из РАЗНЫХ изданий (см. overview.py и макрос digest).
+   Полоска слева цветом ступени важности — та же, что у развёрнутого текста
+   статьи (.full__text): одинаковая пометка у одинакового по смыслу — «это
+   содержание сюжета, а не служебная строка». */
+.over {
+  margin-top: 0.625rem;
+  padding-inline-start: 0.9375rem;
+  border-inline-start: 2px solid var(--tier);
+  max-width: 62ch;
+}
+.over__line {
+  margin: 0 0 0.5rem;
+  font-size: 0.9375rem;
+  color: var(--ink-2);
+}
+.over__line:last-child { margin-bottom: 0; }
+
+/* Издание при предложении. Не сноска и не бренд: обычная ссылка тем же
+   мелким моноширинным, что и остальные выходные данные, — чтобы читалась как
+   подпись, а не спорила с самим текстом за внимание. */
+.over__src {
+  font: 400 0.6875rem var(--font-data);
+  color: var(--ink-3);
+  white-space: nowrap;
+  text-decoration-color: var(--rule);
+}
+.over__src::before { content: '— '; }
+.over__src:hover { color: var(--ink-2); }
+
+.over__new {
+  float: inline-end;
+  margin-inline-start: 0.5rem;
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--tier);
+  border-radius: var(--r);
+  font: 400 0.6875rem/1.5 var(--font-data);
+  color: var(--ink-2);
+}
+
+/* Под обзором «Статья целиком» — служебная строка, а не подводка, поэтому и
+   набрана служебным: иначе два абзаца подряд одинаковым кеглем выглядели как
+   продолжение обзора. */
+.full--under { margin-top: 0.5rem; }
+.full--under .full__sum { font: 400 0.75rem var(--font-data); color: var(--ink-3); }
+.full--under .full__sum:hover { color: var(--ink-2); }
+
+.story__solo {
+  margin: 0.625rem 0 0;
+  font: 400 0.75rem var(--font-data);
+  color: var(--ink-3);
+}
+.story__solo a { color: inherit; text-decoration-color: var(--rule); }
+
+/* «заголовок отсюда» у первого издания списка: главный источник больше не
+   стоит отдельной подписью в выходных данных, и без этой пометки было бы
+   непонятно, куда ведёт сам заголовок. */
+.story__head { font-style: normal; color: var(--ink-3); opacity: 0.7; }
 
 .story__more { margin-top: 0.625rem; }
 .story__summary {

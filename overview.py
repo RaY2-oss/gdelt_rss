@@ -1,0 +1,706 @@
+# -*- coding: utf-8 -*-
+"""overview.py — обзор сюжета по всем его источникам вместо одной статьи.
+
+Раньше витрина показывала подводку той статьи, что победила в кластере, а
+остальные пять изданий лежали свёрнутым списком ссылок и не добавляли к
+сюжету ничего. Здесь наоборот: обзор собирается из всех членов кластера, а
+издания — все, включая главное — идут общим списком под ним.
+
+Как собирается
+--------------
+Из каждого источника берутся первые предложения (дальше двадцатого в
+новостях идёт справка о компании и подпись редакции), считается вес слов по
+самому кластеру, и жадно отбираются два-три предложения: сначала по одному
+от разных изданий, потом добор, и каждое следующее обязано меньше чем на
+четверть состоять из уже сказанных оборотов. Отбор идёт ПО ЦЕНТРАЛЬНОСТИ, а
+не «лид главного источника плюс остальное»: в нигерийском сюжете про тарифы
+главным по свежести оказалось издание, начинавшее с реплики стороннего
+аналитика, — центральность вместо него выбрала прямое заявление министра.
+
+Почему предложения дословные, а не пересказ
+------------------------------------------
+Пересказ здесь пробовался по-настоящему: rut5_base_sum_gazeta (222 млн)
+конвертирован в CTranslate2 int8 и лежит в CT2_DIR, а `make` ниже — рабочий
+вызов, который можно позвать руками. По-русски он пишет действительно живее —
+и примерно на каждом пятом сюжете врёт. Замеры на боевой базе:
+
+  * нигерийский сюжет про тарифы: министр заявил, что повышение НЕ
+    рассматривается, — модель написала «правительство планирует повысить
+    цены на электроэнергию»;
+  * китайский сюжет про ИИ: «более дорогостоящим чат-ботом Claude Fable и
+    более дорогим чат-ботам Clauде Fable» — фраза, которой нет ни в одном
+    источнике и которая ничего не значит.
+
+Сторож чисел (`guarded`) ловит выдуманные суммы и даты, но перевёрнутое
+отрицание не ловит ничто дешевле второй модели. Для новостной витрины это
+дисквалифицирует пересказ как режим по умолчанию: отсутствие обзора лучше
+обзора наоборот. Плюс цена — 8-16 с на сюжет против 20 мс у отбора, то есть
+отдельный воркер и своя строка cron ради текста, которому нельзя верить.
+
+Поэтому по умолчанию — дословные предложения: русский в них ровно тот, что
+дал переводчик (tc-big, второе плечо translate_ru), зато сказанное сказано
+источником, а не машиной.
+"""
+import hashlib
+import json
+import logging
+import os
+import re
+import threading
+from datetime import datetime, timezone
+
+log = logging.getLogger("gdelt_rss")
+
+CT2_DIR = os.environ.get("CT2_DIR", "/opt/translate/ct2")
+HF_HOME = os.environ.get("TRANSLATE_HF_HOME", "/opt/translate/models")
+CT2_NAME = os.environ.get("OVERVIEW_CT2", "rut5-sum-ru")
+HF_NAME = "IlyaGusev/rut5_base_sum_gazeta"
+THREADS = int(os.environ.get("OVERVIEW_THREADS", "3"))
+
+WANT = int(os.environ.get("OVERVIEW_SENTS", "3"))      # предложений в обзоре
+MAX_CHARS = int(os.environ.get("OVERVIEW_CHARS", "560"))
+DUP = 0.28              # доля общих оборотов, после которой предложение — повтор
+HEAD_SENTS = 20         # сколько предложений статьи вообще рассматриваем
+MIN_SENT_WORDS = 5
+MAX_SENT_CHARS = 400    # длиннее — обычно неразобранный список или врезка
+
+# Генеративный путь (`make`, вызывается только вручную).
+MAX_TOKENS = int(os.environ.get("OVERVIEW_MAX_TOKENS", "560"))
+BEAM = int(os.environ.get("OVERVIEW_BEAM", "3"))
+NO_REPEAT = 4
+MAX_OUT = 200
+MIN_OUT_CHARS = 80
+
+# Насколько новый источник должен отличаться от уже учтённых, чтобы сюжет
+# считался дополненным. По четырёхсловным шинглам: 0.55 значит, что больше
+# половины оборотов в нём не встречались раньше. Ниже порога издание просто
+# перепечатало то же самое, и обзор от этого не изменится.
+NOVELTY = float(os.environ.get("OVERVIEW_NOVELTY", "0.55"))
+SHINGLE = 4
+
+# Метка алгоритма отбора. Обзор живёт в кэше две недели, поэтому правка правил
+# отбора без смены метки означала бы, что половина витрины ещё полмесяца
+# показывает текст по старым правилам. Меняется отбор — меняется и метка,
+# строки с чужой меткой считаются непосчитанными.
+KIND = "extract-8"
+
+_engine = None
+_lock = threading.RLock()
+
+# Точка не всегда конец предложения. Список короткий намеренно: разрыв и так
+# требует заглавной буквы после пробела, поэтому «5 млн руб. Работы идут» уже
+# разбирается верно без всяких списков. Здесь только те сокращения, за
+# которыми заглавная буква — норма, потому что дальше стоит имя: «проф. Сани
+# Иса», «ул. Ленина». Ошибка тут дешёвая: слипшиеся предложения просто хуже
+# отбираются, а не теряются.
+_ABBR = ("проф", "акад", "доц", "тов", "им", "св", "ул", "пл", "просп",
+         # Единицы счёта: фраза на них не кончается — за ними идёт валюта или
+         # пересчёт в скобках. «получил QAR1.6 млрд. ($432 млн.) активов»
+         # рвалось надвое, и обе половины были бессмысленны.
+         "млн", "млрд", "трлн", "тыс")
+
+# Слова, с которых предложение отсылает к предыдущему. В связном тексте это
+# норма, в обзоре — нет: предложения тут вырваны из разных статей и стоят
+# рядом, поэтому «Потому что, как и в США.» и «В данном случае это NVIDIA.»
+# не значат ничего. Отсекаем по первому слову — дешевле и надёжнее, чем
+# разбирать, на что именно ссылка.
+_ANAPHORA = frozenset("""
+это этот эта эти этим этой этого том тот та те тем таким такой такая такое
+такие он она оно они его её ее их ему ей им них нём нем туда тогда там
+но а и однако поэтому потому также тоже кроме впрочем зато притом причём
+причем ведь значит наоборот напротив далее затем впоследствии
+""".split())
+# Обращение к читателю и врезки платного доступа: текста сюжета в них нет.
+_PROMO = frozenset("""
+подпишитесь подписывайтесь зарегистрируйтесь войдите оформите читайте
+смотрите узнайте следите поделитесь реклама фото видео подписка
+""".split())
+# То же самое, но отсылка стоит во втором слове: «В данном случае...».
+_ANAPHORA2 = frozenset((
+    "в данном", "в этом", "в том", "в той", "в свою", "при этом", "тем не",
+    "по его", "по её", "по ее", "по их", "на этом", "к тому", "между тем",
+    "с тех", "с того", "до этого", "после этого", "помимо этого",
+))
+# Скобка в разрыв не входит: с открывающей скобки предложения не начинаются,
+# зато ею начинается пересчёт суммы, оторванный от своей фразы.
+_SPLIT = re.compile(r"(?<=[.!?…])\s+(?=[«\"A-ZА-ЯЁ0-9])")
+_WORD = re.compile(r"[а-яёa-z0-9]+", re.I)
+_CYR = re.compile(r"[а-яё]", re.I)
+_NUM = re.compile(r"\d+")
+
+
+def _strip_title(text, title):
+    """Снять заголовок, которым издание начинает собственный текст.
+
+    Каждая седьмая статья в архиве набрана так: заголовок, точки нет, сразу
+    подводка. Для отбора это худший вид мусора — заголовок плотно набит
+    ключевыми словами сюжета, поэтому центральность поднимает склейку выше
+    нормальных предложений, а читатель видит «Китайские модели ИИ дешевле и
+    «достаточно хороши» Быстрый рост передовых китайских моделей...».
+
+    Режем по словарю: считаем, сколько слов подряд с начала текста взяты из
+    заголовка. Точного совпадения строк не ждём — заголовок в базе бывает
+    обрезан, а перевод заголовка и перевод тела расходятся в падежах.
+    """
+    tw = _words(title)
+    if len(tw) < 4:
+        return text           # заголовок в три слова совпадёт с чем угодно
+    tset = set(tw)
+    toks = list(re.finditer(r"\S+", text))
+    cut = 0
+    for i, m in enumerate(toks[:len(tw) + 3]):
+        w = _WORD.findall(m.group().lower())
+        if not w:
+            continue          # тире, кавычка, скобка сами по себе
+        if w[0] not in tset:
+            break
+        cut = i + 1
+    if cut < 4 or cut < len(tw) * 0.7 or cut >= len(toks):
+        return text
+    rest = text[toks[cut].start():]
+    # Если после среза текст начинается с середины фразы, заголовок кончился
+    # не там, где мы решили: лучше оставить склейку, чем сделать обрывок.
+    return rest if re.match(r'[«"(А-ЯЁA-Z0-9]', rest) else text
+
+
+def _sentences(text, title=""):
+    """Русский текст → предложения. Без внешних токенизаторов: nltk и razdel в
+    зависимостях нет, а весь разбор здесь — одна регулярка плюс список
+    сокращений, после которых точка не заканчивает мысль."""
+    t = re.sub(r"\s+", " ", (text or "")).strip()
+    if not t:
+        return []
+    if title:
+        t = _strip_title(t, title)
+    # Дробное число, разорванное переводчиком: «выросла на 16. 8 процента».
+    # Разрыв ставится до разбора, иначе предложение обрывается на «на 16.».
+    t = re.sub(r"(\d)\.\s+(?=\d)", r"\1.", t)
+    out, buf = [], ""
+    for part in _SPLIT.split(t):
+        buf = (buf + " " + part).strip() if buf else part
+        tail = buf.rstrip(".").rsplit(" ", 1)[-1].strip("(«\"").lower()
+        # Одна буква перед точкой — инициал или имя вроде «Z. AI», а не конец
+        # мысли: сюжет про китайский ИИ обрывался на «...таких как Moonshot AI
+        # и Z.» ровно из-за этого.
+        if tail in _ABBR or len(tail) <= 1:
+            continue
+        out.append(buf)
+        buf = ""
+    if buf:
+        out.append(buf)
+    return [s for s in (_usable(x) for x in out) if s]
+
+
+def _usable(s):
+    """Предложение, годное в обзор, — или None.
+
+    Отсев не косметический: в обзор попадает дословный текст, и всё, что
+    прошло сюда, читатель увидит как есть. Ловим то, что регулярно вылезает из
+    чужой вёрстки и машинного перевода.
+    """
+    s = s.lstrip("-—•*  ").strip()
+    s = re.sub(r"^(?:TL|ТЛ)\s*;\s*(?:DR|ДР)?\s*[:—-]*\s*", "", s, flags=re.I)
+    # Врезка или дейтлайн перед самим текстом: «КЛЮЧЕВЫЕ ТОЧКИ - ...»,
+    # «НЬЮ-ДЕЛИ: ...». Доля заглавных ниже такое не ловит: у длинной фразы
+    # два капсовых слова в начале в четверть не укладываются.
+    s = re.sub(r"^[A-ZА-ЯЁ0-9][^a-zа-яё]{2,40}?[-—:]\s+", "", s)
+    n = len(_WORD.findall(s))
+    if not MIN_SENT_WORDS <= n or len(s) > MAX_SENT_CHARS:
+        return None
+    # Обрывок с середины фразы: настоящее предложение начинается с заглавной,
+    # кавычки или числа. «судим и не проповедуем.» — это хвост, а не мысль.
+    if not re.match(r'[«"A-ZА-ЯЁ0-9]', s):
+        return None
+    # Врезка из вёрстки: «КЛЮЧЕВЫЕ ТОЧКИ», «READ ALSO», «СМОТРИТЕ ТАКЖЕ».
+    caps = [w for w in s.split() if len(w) > 2 and w.isupper()]
+    if len(caps) > n * 0.25:
+        return None
+    # Непереведённый кусок: кириллицы должно быть больше, чем латиницы, иначе
+    # это английский текст, куда затесалось русское слово.
+    cyr = len(re.findall(r"[а-яё]", s, re.I))
+    lat = len(re.findall(r"[a-z]", s, re.I))
+    if cyr < lat:
+        return None
+    # Развалившееся сокращение или инициалы. «U.S. restrictions» переводчик
+    # разбирает как два предложения и выдаёт «U. Св. Ограничения на модели»:
+    # S. он принял за Saint. Признак — заглавная буква или пара букв перед
+    # точкой в середине фразы. Строчные при этом целы: «в 2024 г. Компания
+    # заявила» и «им. Королёва» сюда не попадают.
+    # Дальше обязана стоять обычная заглавная-плюс-строчная: аббревиатура
+    # целиком заглавными — часть имени, а не поломка («Z. AI», «Св. FCC»).
+    if re.search(r"(?:^|\s)[A-ZА-ЯЁ][a-zа-яё]?\.\s+[A-ZА-ЯЁ][a-zа-яё]", s):
+        return None
+    # Фраза, оборванная на голом числе: «выросла на 16.», «закрылся на 465.».
+    # Так выглядит дробь, у которой вторую половину унесло в другое
+    # предложение и склейка выше её уже не достала. Год — не обрыв.
+    if re.search(r"(?<![\d.,])\d+\.$", s) and not re.search(r"\b(?:19|20)\d\d\.$", s):
+        return None
+    # Кавычка, открытая в отобранном предложении и закрытая в следующем,
+    # которого в обзоре нет. Снимаем саму кавычку, а не предложение: реплика
+    # остаётся, висящего «ёлочкой» начала — нет.
+    if s.startswith("«") and s.count("«") > s.count("»"):
+        s = s[1:].lstrip()
+    if s.endswith("»") and s.count("»") > s.count("«"):
+        s = s[:-1].rstrip()
+    head = _WORD.findall(s.lower())[:2]
+    if head and (head[0] in _ANAPHORA or head[0] in _PROMO
+                 or " ".join(head) in _ANAPHORA2):
+        return None
+    return s
+
+
+def _words(s):
+    return [w.lower() for w in _WORD.findall(s)]
+
+
+def _shingles(text, n=SHINGLE):
+    w = _words(text)
+    return {tuple(w[i:i + n]) for i in range(max(0, len(w) - n + 1))}
+
+
+def novelty(new_text, known_text):
+    """Доля оборотов нового источника, которых не было в уже учтённых.
+
+    1.0 — источник не пересекается с прежними ни одним оборотом, 0.0 — всё уже
+    сказано. Шинглы, а не эмбеддинги, намеренно: вопрос здесь не «про то же ли
+    это» (про то же, иначе издания не попали бы в один кластер), а «есть ли
+    новые формулировки». На него отвечает лексика. Косинус двух пересказов
+    одного события даст 0.95 независимо от того, добавил второй факты или нет.
+    """
+    new = _shingles(new_text)
+    if not new:
+        return 0.0
+    return len(new - _shingles(known_text)) / len(new)
+
+
+def _tf_idf(sents):
+    """Веса слов по корпусу из самих предложений сюжета.
+
+    В новостном кластере повторяется как раз суть, а не вода, поэтому вес
+    растёт с частотой по предложениям — но до середины: слово, стоящее
+    вообще везде, сюжет не характеризует, как и слово из одного предложения
+    (имя корреспондента, город подписи).
+    """
+    df = {}
+    for s in sents:
+        for w in set(_words(s)):
+            df[w] = df.get(w, 0) + 1
+    n = len(sents)
+    return {w: (c / n) * (1.0 - c / (n + 1.0)) for w, c in df.items()}
+
+
+def _score(sent, weight):
+    w = set(_words(sent))
+    if not w:
+        return 0.0
+    # Делим на корень размера, а не на размер: иначе побеждают обрывки в три
+    # слова, у которых вся длина — одно ключевое слово.
+    return sum(weight.get(x, 0.0) for x in w) / (len(w) ** 0.5)
+
+
+def digest(docs, want=WANT, max_chars=MAX_CHARS):
+    """(url, текст, заголовок) источников сюжета → [(url, предложение)] обзора.
+
+    docs — все члены кластера; порядок значения не имеет, отбор идёт по
+    центральности. Первый круг берёт по одному предложению от разных изданий,
+    второй добирает до `want`, если места хватило: обзор, собранный из трёх
+    изданий, честнее трёх предложений подряд из одного.
+    """
+    cand = []
+    for url, text, title in docs:
+        if not text or not _CYR.search(text):
+            continue          # ещё не переведено — в обзор такому нечего дать
+        for pos, s in enumerate(_sentences(text, title)[:HEAD_SENTS]):
+            cand.append((url, pos, s))
+    if not cand:
+        return []
+
+    weight = _tf_idf([c[2] for c in cand])
+    # Лид новости несёт факт, дальше идут обстоятельства.
+    scored = sorted(((_score(s, weight) * (1.3 if pos == 0 else 1.1 if pos == 1 else 1.0),
+                      url, pos, s) for url, pos, s in cand), key=lambda x: -x[0])
+
+    out, seen, total, used = [], set(), 0, set()
+    for first_round in (True, False):
+        for _w, url, pos, s in scored:
+            if len(out) >= want:
+                break
+            if first_round and url in used:
+                continue
+            if total + len(s) > max_chars and out:
+                continue
+            sh = _shingles(s)
+            if not sh or len(sh & seen) > len(sh) * DUP:
+                continue
+            out.append((url, pos, s))
+            seen |= sh
+            total += len(s)
+            used.add(url)
+    # В порядок чтения: лиды вперёд, дальше по месту в своей статье.
+    out.sort(key=lambda x: (0 if x[2] == 0 else 1, x[2]))
+    return [(url, s) for url, _pos, s in out]
+
+
+# ── Генеративный путь: в сборку витрины не входит, см. шапку модуля ────────
+
+class _RuT5:
+    def __init__(self):
+        import ctranslate2
+        from transformers import AutoTokenizer
+        self.tok = AutoTokenizer.from_pretrained(
+            HF_NAME, local_files_only=True, cache_dir=os.path.join(HF_HOME, "hub"))
+        self.tr = ctranslate2.Translator(
+            os.path.join(CT2_DIR, CT2_NAME), device="cpu", compute_type="int8",
+            inter_threads=1, intra_threads=THREADS)
+
+    def tokens(self, text):
+        return len(self.tok(text, add_special_tokens=False)["input_ids"])
+
+    def __call__(self, texts):
+        src = [self.tok.convert_ids_to_tokens(
+            self.tok(t, max_length=600, truncation=True)["input_ids"]) for t in texts]
+        res = self.tr.translate_batch(src, beam_size=BEAM, no_repeat_ngram_size=NO_REPEAT,
+                                      max_decoding_length=MAX_OUT)
+        return [self.tok.decode(self.tok.convert_tokens_to_ids(r.hypotheses[0]),
+                                skip_special_tokens=True) for r in res]
+
+
+def engine():
+    global _engine
+    with _lock:
+        if _engine is None:
+            log.info("overview: гружу %s", CT2_NAME)
+            _engine = _RuT5()
+        return _engine
+
+
+def unload():
+    global _engine
+    with _lock:
+        _engine = None
+
+
+def available():
+    return os.path.isdir(os.path.join(CT2_DIR, CT2_NAME))
+
+
+def _tidy(text):
+    """Снять хвост, оборванный потолком длины: половина фразы хуже её
+    отсутствия."""
+    t = re.sub(r"\s+", " ", (text or "")).strip()
+    if not t:
+        return ""
+    if t[-1] not in ".!?…»\"":
+        cut = max(t.rfind(". "), t.rfind("! "), t.rfind("? "))
+        t = t[:cut + 1] if cut > MIN_OUT_CHARS else t
+    return t.strip()
+
+
+def guarded(summary, source):
+    """Пересказ годен? Числа сверяются с источником, остальное — здравый смысл.
+
+    Ловит выдуманные суммы, даты и количества — самое заметное враньё
+    абстрактивной модели. Перевёрнутое отрицание («планирует повысить» вместо
+    «не рассматривает повышение») не ловит: за этим сюда и не ходят, см.
+    шапку модуля. Отказ — штатный исход, а не ошибка.
+    """
+    t = _tidy(summary)
+    if len(t) < MIN_OUT_CHARS:
+        return None
+    have = set(_NUM.findall(source))
+    for n in _NUM.findall(t):
+        if n not in have:
+            log.info("overview: отбракован — число %s не из источника", n)
+            return None
+    if t in source:
+        return None           # дословная копия источника пересказом не является
+    return t
+
+
+def make(docs):
+    """Пересказ сюжета одной моделью. (текст, использованные url) или (None, [])."""
+    if not available():
+        log.error("overview: модель %s не установлена в %s", CT2_NAME, CT2_DIR)
+        return None, []
+    eng = engine()
+    picked = digest(docs, want=12, max_chars=MAX_TOKENS * 3)
+    if not picked:
+        return None, []
+    src = " ".join(s for _u, s in picked)
+    while eng.tokens(src) > MAX_TOKENS and len(picked) > 1:
+        picked = picked[:-1]
+        src = " ".join(s for _u, s in picked)
+    return guarded(eng([src])[0], src), list(dict.fromkeys(u for u, _s in picked))
+
+
+# ── Кэш ─────────────────────────────────────────────────────────────────────
+# Ключ — набор адресов сюжета, а не метка кластера: метки живут один прогон, а
+# сюжет живёт две недели. Пришло новое издание — набор изменился, ключ другой,
+# сюжет пересобирается. Пометка «дополнено» ставится не на всякий новый
+# источник, а только на тот, что принёс новые обороты (см. novelty): в
+# кластере из шести изданий пятеро обычно перепечатывают одно агентство.
+
+_DDL = """
+CREATE TABLE IF NOT EXISTS story_overview (
+    key      TEXT PRIMARY KEY,
+    urls     TEXT NOT NULL,
+    lines    TEXT NOT NULL,
+    kind     TEXT NOT NULL,
+    made_at  TEXT NOT NULL,
+    added_at TEXT
+);
+CREATE TABLE IF NOT EXISTS story_overview_url (
+    url TEXT PRIMARY KEY,
+    key TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_overview_url_key ON story_overview_url(key);
+"""
+
+
+def ensure(conn):
+    conn.executescript(_DDL)
+    conn.commit()
+
+
+def key_of(urls):
+    h = hashlib.sha1()
+    for u in sorted(set(urls)):
+        h.update(u.encode("utf-8", "replace") + b"\n")
+    return h.hexdigest()
+
+
+def load(conn, keys):
+    """{ключ: {lines, added, made_at}} для тех ключей, что уже посчитаны."""
+    out, keys = {}, list({k for k in keys if k})
+    if conn is None:
+        return out            # без базы обзор считается на лету и не хранится
+    for i in range(0, len(keys), 400):
+        chunk = keys[i:i + 400]
+        q = ("SELECT key,lines,made_at,added_at FROM story_overview "
+             "WHERE kind=? AND key IN (%s)" % ",".join("?" * len(chunk)))
+        for key, lines, made, added in conn.execute(q, [KIND] + chunk):
+            out[key] = {"lines": json.loads(lines), "made_at": made,
+                        "added": bool(added)}
+    return out
+
+
+def prior(conn, urls):
+    """Прежний обзор сюжета: строка, покрывающая больше всего его адресов.
+
+    Так сюжет узнаётся, даже когда состав источников сменился наполовину:
+    ключ уже другой, но какие-то адреса те же.
+    """
+    urls = list(urls)
+    if not urls:
+        return None
+    q = ("SELECT key,COUNT(*) c FROM story_overview_url WHERE url IN (%s) "
+         "GROUP BY key ORDER BY c DESC LIMIT 1" % ",".join("?" * len(urls)))
+    row = conn.execute(q, urls).fetchone()
+    if not row:
+        return None
+    got = conn.execute("SELECT key,urls,lines,made_at,added_at FROM story_overview "
+                       "WHERE key=? AND kind=?", (row[0], KIND)).fetchone()
+    if not got:
+        return None
+    return {"key": got[0], "urls": json.loads(got[1]), "lines": json.loads(got[2]),
+            "made_at": got[3], "added": bool(got[4])}
+
+
+def store(conn, key, urls, lines, added=False, kind=None):
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    conn.execute("INSERT OR REPLACE INTO story_overview"
+                 "(key,urls,lines,kind,made_at,added_at) VALUES (?,?,?,?,?,?)",
+                 (key, json.dumps(list(urls), ensure_ascii=False),
+                  json.dumps(lines, ensure_ascii=False), kind or KIND,
+                  now, now if added else None))
+    conn.executemany("INSERT OR REPLACE INTO story_overview_url(url,key) VALUES (?,?)",
+                     [(u, key) for u in urls])
+
+
+def resolve(conn, cached, key, urls, docs):
+    """Обзор сюжета: из кэша или собранный заново. → (строки, дополнен ли).
+
+    cached — то, что вернул `load` на всю пачку ключей разом: по строке на
+    сюжет из базы витрина бы не собралась, их шесть тысяч.
+    """
+    hit = cached.get(key)
+    if hit:
+        return hit["lines"], hit["added"]
+
+    lines = digest(docs)
+    if not lines or conn is None:
+        return lines, False
+    old = prior(conn, urls)
+    if not old:
+        store(conn, key, urls, lines, added=False)
+        return lines, False
+
+    # Сюжет уже был. Дополнением считается только источник с новыми оборотами:
+    # перепечатка того же агентства пометки не заслуживает.
+    known = set(old["urls"])
+    fresh = [t for u, t, _h in docs if u not in known and t]
+    base = " ".join(t for u, t, _h in docs if u in known and t)
+    added = bool(fresh) and bool(base) and \
+        max(novelty(t, base) for t in fresh) >= NOVELTY
+    store(conn, key, urls, lines if added else old["lines"],
+          added=added or old["added"])
+    return (lines if added else old["lines"]), (added or old["added"])
+
+
+def sweep(conn):
+    """Убрать обзоры сюжетов, выпавших из архива.
+
+    Границу задаёт сама таблица articles, которую чистит пайплайн по
+    KEEP_HOURS: своей даты у обзора нет, есть только набор адресов. Сюжет
+    считается живым, пока в архиве остался хотя бы один его источник — иначе
+    обзор исчезал бы раньше строки, которую подписывает.
+    """
+    conn.execute("DELETE FROM story_overview_url "
+                 "WHERE url NOT IN (SELECT url FROM articles)")
+    cur = conn.execute("DELETE FROM story_overview WHERE key NOT IN "
+                       "(SELECT key FROM story_overview_url)")
+    return cur.rowcount
+
+
+def _selfcheck():
+    s = _sentences("Высота башни составляет 324 метра. Основание квадратно, "
+                   "125 метров с любой стороны. Титул она удерживала сорок "
+                   "один год подряд.")
+    assert len(s) == 3, s
+    # Обрубок короче MIN_SENT_WORDS предложением не считается: в новостных
+    # текстах это подпись фотографии или остаток вёрстки.
+    assert _sentences("Фото: Reuters. Подробности ниже.") == []
+
+    # Чужая вёрстка и обрывки в обзор не идут.
+    good = "Правительство утвердило программу поддержки на три ближайших года."
+    assert _sentences("КЛЮЧЕВЫЕ ТОЧКИ ЭТОГО МАТЕРИАЛА СОБРАНЫ РЕДАКЦИЕЙ. " + good) == [good]
+    assert _sentences("судим и не проповедуем никого из них. " + good) == [good]
+    assert _sentences("The minister said tariffs will not rise, сообщает агентство. "
+                      + good) == [good]
+    assert _sentences("- " + good) == [good]
+
+    # Инициал перед точкой предложение не заканчивает.
+    s = _sentences("Дешёвые модели выпускают Moonshot AI и Z. AI из Пекина. "
+                   "Рынок отреагировал заметным ростом котировок.")
+    assert len(s) == 2 and "Z. AI" in s[0], s
+
+    # Точка внутри звания не разрывает предложение, а конец фразы — разрывает.
+    s = _sentences("Платежи подтвердил проф. Сани Иса из Даматуру. "
+                   "Проект стоил 5 млн руб. Работы идут уже второй год подряд.")
+    assert len(s) == 3, s
+    assert "проф. Сани" in s[0], s
+
+    # Заголовок, которым издание начинает собственный текст, снимается —
+    # вместе с хвостом, который перевод к нему приписал сверх базы.
+    title = "Оттаивание Сибири подрывает метановые цели к 2050 году"
+    body = ("Оттаивание Сибири подрывает метановые цели к 2050 году Пекина. "
+            "По мере нагревания Арктики болота отдают вдвое больше метана.")
+    s = _sentences(body, title)
+    assert s == ["По мере нагревания Арктики болота отдают вдвое больше метана."], s
+    # Совпало только начало — режем ровно заголовок, продолжение остаётся.
+    s = _sentences("Оттаивание Сибири подрывает метановые цели к 2050 году "
+                   "Учёные насчитали шестьсот новых источников выброса.", title)
+    assert s == ["Учёные насчитали шестьсот новых источников выброса."], s
+    # Похожие слова в подводке заголовком не считаются: срез не срабатывает.
+    s = _sentences("Оттаивание вечной мерзлоты давно перестало быть "
+                   "региональной проблемой Сибири.", title)
+    assert len(s) == 1 and s[0].startswith("Оттаивание вечной"), s
+
+    # Дробное число, разорванное переводчиком, не обрывает фразу на «на 16.».
+    s = _sentences("Мощность ветровой и солнечной генерации выросла на 16. "
+                   "8 процента за первое полугодие.")
+    assert len(s) == 1 and "16.8" in s[0], s
+
+    # «U.S. restrictions» переводчик разложил в «U. Св. Ограничения» — такое
+    # предложение читателю не показываем.
+    assert _sentences("Глава компании высказался о U. Св. Ограничения на "
+                      "модели с открытым весом и назвал их избыточными.") == []
+    assert _sentences("Св. Федеральная комиссия по связи запретила ввоз "
+                      "иностранных инверторов и человекоподобных роботов.") == []
+    # Строчное сокращение при этом целое: «в 2024 г. Компания заявила».
+    s = _sentences("Проект начали в 2024 г. Компания обещает запуск к осени.")
+    assert len(s) == 1 and "2024 г. Компания" in s[0], s
+
+    # Врезка «TL;DR» в начале абзаца снимается, сам абзац остаётся.
+    assert _sentences("TL;DR: " + good) == [good]
+
+    # Врезка и дейтлайн снимаются, текст за ними остаётся.
+    assert _sentences("КЛЮЧЕВЫЕ ТОЧКИ - " + good) == [good]
+    assert _sentences("НЬЮ-ДЕЛИ: " + good) == [good]
+
+    # Отсылка к предыдущему предложению в обзоре повисает в воздухе.
+    assert _sentences("В данном случае это NVIDIA и её партнёры по альянсу.") == []
+    assert _sentences("«Это просто кажется более быстрым», — сказал он о модели.") == []
+    assert _sentences("Однако цену пришлось поднять уже через две недели.") == []
+    assert _sentences("С тех пор вспышка добралась до двух соседних провинций.") == []
+
+    # Врезка платного доступа приклеена к тексту вплотную — она не текст.
+    assert _sentences("Подпишитесь сейчас, чтобы читать все наши материалы "
+                      "без ограничений по всей стране.") == []
+
+    # Кавычка без пары снимается, сама реплика остаётся.
+    s = _sentences("«К сожалению, проблема вовсе не в самом ведомстве.")
+    assert s == ["К сожалению, проблема вовсе не в самом ведомстве."], s
+    s = _sentences("«Проблема не в ведомстве», — сказал он на брифинге в среду.")
+    assert s and s[0].startswith("«Проблема"), s
+
+    # Единица счёта фразу не заканчивает: пересчёт в скобках остаётся при ней.
+    s = _sentences("Компания привлекла QAR1.6 млрд. ($432 млн.) под залог "
+                   "товарных активов у банка Духан.")
+    assert len(s) == 1 and "($432 млн.)" in s[0], s
+
+    # Фраза, оборванная на голом числе, в обзор не идёт; год — идёт.
+    assert _sentences("Акции подорожали и закрылись на отметке 465.") == []
+    s = _sentences("Соглашение стороны подписали ещё в 2024.")
+    assert len(s) == 1, s
+
+    lead = ("Министр энергетики Джозеф Тегбе заверил нигерийцев, что "
+            "правительство пока не рассматривает повышение тарифов.")
+    echo = ("Как сообщает агентство, министр энергетики Джозеф Тегбе заверил "
+            "нигерийцев, что правительство пока не рассматривает повышение.")
+    extra = ("Профсоюз энергетиков объявил о забастовке с понедельника в трёх "
+             "штатах страны.")
+
+    # Пять перепечаток одного и того же дают один обзор, а не пять строк.
+    lines = digest([("u%d" % i, lead, "") for i in range(5)])
+    assert len(lines) == 1, lines
+
+    # Разные факты попадают оба, а пересказ того же — не попадает: из трёх
+    # изданий в обзоре два, причём забастовка обязательно, а из двух версий
+    # заявления министра — ровно одна, любая.
+    lines = digest([("a", lead, ""), ("b", echo, ""), ("c", extra, "")])
+    assert len(lines) == 2, lines
+    got = {u for u, _s in lines}
+    assert "c" in got and len(got & {"a", "b"}) == 1, lines
+
+    # Непереведённое в обзор не идёт: латиница вместо русского — не текст
+    # для читателя витрины.
+    assert digest([("a", "Minister said tariffs will not rise this year at all.", "")]) == []
+
+    # Центральность, а не порядок: сюжет узнаётся по тому, что повторяют все,
+    # даже если такой источник пришёл последним.
+    odd = ("Сторонний аналитик Гаффар Тунде попытался исправить сообщения "
+           "телеканалов о вчерашнем брифинге в Абудже.")
+    lines = digest([("bad", odd, ""), ("a", lead, ""), ("b", echo, "")], want=1)
+    assert lines[0][0] in ("a", "b"), lines
+
+    # Новизна: перепечатка против дополнения.
+    assert novelty(lead, lead) == 0.0
+    assert novelty(echo, lead) < NOVELTY
+    assert novelty(extra, lead) > NOVELTY
+
+    # Сторож чисел генеративного пути.
+    src = "Компания вложит 100 млн в 2026 году."
+    ok = ("Компания вложит 100 млн в 2026 году, чтобы расширить производство "
+          "микродрам под управлением искусственного интеллекта.")
+    assert guarded(ok, src) == ok
+    assert guarded(ok.replace("100", "900"), src) is None
+    assert guarded("Коротко.", src) is None
+    assert guarded(ok + " Дальше идёт незаконченная мыс", src) == ok
+
+    assert key_of(["b", "a"]) == key_of(["a", "b", "a"])
+    print("overview selfcheck ok")
+
+
+if __name__ == "__main__":
+    _selfcheck()

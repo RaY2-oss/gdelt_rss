@@ -35,6 +35,7 @@ import entity_ru
 import glossary
 import importance as imp
 import feeds
+import overview
 from feeds import _pubdate
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -328,6 +329,19 @@ def _safe_url(url):
     return "#"
 
 
+def _ru_doc(row):
+    """(url, русский текст, русский заголовок) статьи для обзора.
+
+    Свой текст, если издание пишет по-русски, иначе перевод. Заголовок нужен
+    отбору, чтобы срезать его же копию в начале статьи. Порядок колонок —
+    feeds._SELECT.
+    """
+    own = (row[7] or "").lower().startswith("ru")
+    return (row[0],
+            row[2] if own and row[2] else (row[13] or ""),
+            row[1] if own and row[1] else (row[12] or ""))
+
+
 def window_rows(conn, country, hours):
     """Те же колонки и тот же порог, что у `feeds.build_country`."""
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
@@ -368,8 +382,14 @@ def stories(conn, rows, country, now):
     en = translate.translate_missing(
         conn, [(r[0], r[1], r[2], r[7], r[8], r[9]) for r in todo])
 
+    # Обзоры сюжетов — пачкой на страну: по строке из базы витрина бы не
+    # собралась, сюжетов шесть тысяч. Ключ — набор адресов кластера, см.
+    # overview: он переживает смену меток кластеризации между прогонами.
+    keys = [overview.key_of([m[0] for m in groups[lab]]) for lab, _w in ranked]
+    cached = overview.load(conn, keys)
+
     out = []
-    for lab, weight in ranked:
+    for key, (lab, weight) in zip(keys, ranked):
         members = groups[lab]
         (url, title, text, pdate, fetched, _llm, _e, lang, t_en, x_en, _be, ents,
          t_ru, x_ru) = members[0]
@@ -380,6 +400,15 @@ def stories(conn, rows, country, now):
             if d and d not in seen_domains:
                 seen_domains.add(d)
                 sources.append({"domain": d, "url": _safe_url(m[0])})
+        by_url = {s["url"]: s["domain"] for s in sources}
+        lines, updated = overview.resolve(
+            conn, cached, key, [m[0] for m in members],
+            [_ru_doc(m) for m in members])
+        # Издание у каждой строки обзора — не украшение: предложения взяты
+        # дословно из разных источников, и без подписи абзац выглядел бы одним
+        # авторским текстом, которым он не является.
+        over = [{"text": s, "domain": by_url.get(_safe_url(u), imp.domain(u)),
+                 "url": _safe_url(u)} for u, s in lines if s]
         dt = _pubdate(pdate, fetched)
         # Структурная важность приходит в [0,1] (importance.structural); шкала
         # 0-100 — только для показа, столбик и ступень тона считают по ней.
@@ -391,6 +420,10 @@ def stories(conn, rows, country, now):
             "title": clean,
             # оригинал показываем, только если он реально другой (был перевод)
             "orig_title": _clean_title(title, head) if (t_ru or t_en) and title else "",
+            # Обзор по всем изданиям сюжета; пока переводов нет — прежняя
+            # подводка одной статьи, чтобы строка не осталась пустой.
+            "overview": over,
+            "updated": updated,
             "snippet": _snippet(x_ru or x_en or text, lead=clean),
             "body": _paras(x_ru or x_en or text, lead=clean),
             "lang": RU_LANG.get(lang, lang or ""),
@@ -418,6 +451,10 @@ def stories(conn, rows, country, now):
             "country": country,
             "country_ru": RU_COUNTRY.get(country, settings.country_display(country)),
         })
+    # Одна фиксация на страну, а не на сюжет: обзоров пишется несколько тысяч,
+    # и транзакция на каждый стоила бы дороже самой сборки.
+    if conn is not None:
+        conn.commit()
     # Порядок уже задан ranked — пересортировывать нечем и незачем.
     return out
 
@@ -643,6 +680,7 @@ def build(out_dir=OUT_DIR):
     conn = connect()
     try:
         status = pipeline_status(conn, now)
+        overview.ensure(conn)
         by_country = {c: stories(conn, window_rows(conn, c, SITE_HOURS), c, now)
                       for c in settings.COUNTRIES}
 
@@ -665,6 +703,11 @@ def build(out_dir=OUT_DIR):
         # следующим часовым прогоном — но уже навсегда.
         wanted.update(e.strip() for s in everything for e in s["entities"])
         names_ru = entity_ru.translate_names(conn, sorted(wanted))
+
+        # Обзоры сюжетов, выпавших из архива. Своей даты у обзора нет, есть
+        # только набор адресов, поэтому чистка идёт от обратного: пропали из
+        # articles все адреса сюжета — пропал и обзор.
+        overview.sweep(conn)
     finally:
         conn.close()
 

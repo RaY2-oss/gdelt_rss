@@ -13,11 +13,36 @@
    это не отменяет (внизу выход на издание), но ради двух абзацев уходить со
    страницы незачем. Где полного текста нет — обычный абзац, без ложного
    обещания раскрытия. #}
+{# Обзор сюжета: два-три предложения, взятых дословно из РАЗНЫХ изданий
+   кластера (см. overview.py). Издание подписано у каждого — предложения чужие,
+   и без подписи абзац читался бы как один авторский текст, которым он не
+   является. Раньше на этом месте стоял пересказ одной статьи-победителя, и
+   остальные пять источников сюжета не добавляли к нему ничего.
+
+   Пометка «дополнено» появляется, когда к сюжету пришло издание с новыми
+   формулировками, а не очередная перепечатка того же агентства. #}
+{% macro digest(s) %}
+{% if s.overview %}
+<div class="over">
+  {% if s.updated %}<span class="over__new">дополнено</span>{% endif %}
+  {% for o in s.overview %}
+  <p class="over__line">{{ o.text }}
+    <a class="over__src" href="{{ o.url }}" rel="noopener nofollow">{{ o.domain }}</a>
+  </p>
+  {% endfor %}
+</div>
+{% endif %}
+{% endmacro %}
+
+
+{# Полный текст головной статьи. Когда обзор есть, в свёрнутом виде тут стоит
+   не подводка (её роль забрал обзор, и повторять её значило бы напечатать одно
+   и то же дважды), а прямое приглашение раскрыть статью. #}
 {% macro snippet(s) %}
 {% if s.body %}
-<details class="full" {% if not s.translated and s.lang_code %}lang="{{ s.lang_code }}"{% endif %}>
+<details class="full{% if s.overview %} full--under{% endif %}" {% if not s.translated and s.lang_code %}lang="{{ s.lang_code }}"{% endif %}>
   <summary class="full__sum">
-    <span class="full__cut">{{ s.snippet }}</span>
+    <span class="full__cut">{% if s.overview %}Статья целиком{% else %}{{ s.snippet }}{% endif %}</span>
     <span class="full__less">свернуть текст</span>
   </summary>
   <div class="full__text">
@@ -31,7 +56,7 @@
     </p>
   </div>
 </details>
-{% elif s.snippet %}
+{% elif s.snippet and not s.overview %}
 <p class="story__snippet" {% if not s.translated and s.lang_code %}lang="{{ s.lang_code }}"{% endif %}>{{ s.snippet }}</p>
 {% endif %}
 {% endmacro %}
@@ -52,15 +77,22 @@
 {% endmacro %}
 
 
-{# Остальные издания, подхватившие сюжет. Одинаково у лида и у любой строки:
-   размер кластера — такое же показание, как важность. #}
+{# Издания сюжета — ВСЕ, включая то, на которое ведёт заголовок. Раньше главное
+   стояло отдельной подписью в выходных данных, а список назывался «Ещё N
+   источников» и главное в себя не включал: получалось два разных счёта одного
+   и того же, и на строке с шестью изданиями «Ещё 5» читалось как ошибка.
+   Теперь счёт один — сколько изданий написало о сюжете. #}
 {% macro sources(s) %}
-{% if s.sources|length > 1 %}
+{# Одно издание — просто его имя: «1 источник» под раскрывающимся треугольником
+   прячет одну строку за двумя щелчками. #}
+{% if s.sources|length == 1 %}
+<p class="story__solo"><a href="{{ s.sources[0].url }}" rel="noopener nofollow">{{ s.sources[0].domain }}</a></p>
+{% elif s.sources %}
 <details class="story__more">
-  <summary class="story__summary">Ещё {{ (s.sources|length) - 1 }} {{ ((s.sources|length) - 1)|plural('источник','источника','источников') }}</summary>
+  <summary class="story__summary">{{ s.sources|length }} {{ s.sources|length|plural('источник','источника','источников') }}</summary>
   <ul class="story__sources">
-    {% for src in s.sources[1:] %}
-    <li><a href="{{ src.url }}" rel="noopener nofollow">{{ src.domain }}</a></li>
+    {% for src in s.sources %}
+    <li><a href="{{ src.url }}" rel="noopener nofollow">{{ src.domain }}</a>{% if loop.first %} <i class="story__head">заголовок отсюда</i>{% endif %}</li>
     {% endfor %}
   </ul>
 </details>
@@ -86,7 +118,9 @@
         <i class="story__impbar" aria-hidden="true"></i>важность <b>{{ s.score }}</b>
       </span>
       {% if show_country %}<a class="story__country" href="/c/{{ s.country }}.html">{{ s.country_ru }}</a>{% endif %}
-      <span class="story__source">{{ s.domain }}</span>
+      {# Издания больше не подписаны здесь: главное стояло в этой строке, а
+         список под ней назывался «Ещё N» и главное не включал — один и тот же
+         сюжет считался дважды. Все издания теперь в одном блоке (sources). #}
       {% if s.outlets > 1 %}<span class="story__outlets">{{ s.outlets }} {{ s.outlets_word }}</span>{% endif %}
       <time class="story__time" datetime="{{ s.iso }}">{{ s.ago }}</time>
       {# язык у части статей не определился — тогда просто «перевод», без «пер. с » в никуда #}
@@ -94,6 +128,7 @@
       {% elif s.lang %}<span class="story__tag story__tag--plain">{{ s.lang }}</span>{% endif %}
     </p>
 
+    {{ digest(s) }}
     {{ snippet(s) }}
     {{ ents(s.entities) }}
     {{ sources(s) }}

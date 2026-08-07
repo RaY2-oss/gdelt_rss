@@ -695,7 +695,10 @@
       };
       stories.forEach(function (n) {
         add((n.querySelector('.story__country') || {}).textContent);
-        add((n.querySelector('.story__source') || {}).textContent);
+        // Издание сюжета: в разметке ленты оно больше не подписано в выходных
+        // данных, а стоит первым в общем списке источников (или один, если
+        // источник единственный). См. макрос sources в _story.html.
+        add((n.querySelector('.story__sources a, .story__solo a') || {}).textContent);
         Array.prototype.forEach.call(n.querySelectorAll('.ents button'),
           function (b) { add(b.textContent); });
       });

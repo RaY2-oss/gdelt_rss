@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_story.html" import feed, tools, snippet, ents, sources %}
+{% from "_story.html" import feed, tools, snippet, ents, sources, digest %}
 {% from "_map.html" import radar %}
 {% set home = True %}
 
@@ -59,12 +59,12 @@
           <i class="story__impbar" aria-hidden="true"></i>важность <b>{{ lead.score }}</b>
         </span>
         <a class="story__country" href="/c/{{ lead.country }}.html">{{ lead.country_ru }}</a>
-        <span class="story__source">{{ lead.domain }}</span>
         {% if lead.outlets > 1 %}<span class="story__outlets">{{ lead.outlets }} {{ lead.outlets_word }}</span>{% endif %}
         <time class="story__time" datetime="{{ lead.iso }}">{{ lead.ago }}</time>
         {% if lead.translated %}<span class="story__tag">{{ 'пер. с ' ~ lead.lang if lead.lang else 'перевод' }}</span>{% endif %}
       </p>
 
+      {{ digest(lead) }}
       {{ snippet(lead) }}
       {{ ents(lead.entities) }}
       {{ sources(lead) }}
