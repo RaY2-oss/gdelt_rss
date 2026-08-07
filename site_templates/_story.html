@@ -100,12 +100,43 @@
 {% endmacro %}
 
 
+{# Похожие сюжеты. Соседей считает сборка по эмбеддингу тела (см. akin в
+   site.py), а лежат они в search.json, а не здесь: у шести тысяч сюжетов это
+   четверть мегабайта ссылок, которые почти никто не раскроет. Разметка несёт
+   только их число — по нему видно, есть ли что раскрывать, и раскрытие уже
+   идёт за корпусом.
+
+   Соседи ищутся по всему архиву, а не внутри страны: дедуп фида работает
+   в пределах одной, и то же событие в чужой подаче — как раз то, чего на
+   странице страны иначе не увидеть. #}
+{% macro akin(s) %}
+{% if s.akin %}
+<details class="akin" data-akin>
+  <summary class="akin__sum">Похожие сюжеты<b>{{ s.akin }}</b></summary>
+  <ol class="akin__list" data-akin-list><li class="akin__wait">Ищем…</li></ol>
+</details>
+{% endif %}
+{% endmacro %}
+
+
+{# Отложить сюжет. Список живёт в браузере читателя (localStorage) и никуда не
+   уходит: сервера у витрины нет, а заводить его ради закладок незачем.
+   Кнопка стоит в левом поле под номером — там, где у строки и так пусто. #}
+{% macro keep() %}
+<button class="keep" type="button" data-keep aria-pressed="false"
+        aria-label="Отложить сюжет" title="Отложить (клавиша s)">
+  <span class="keep__ico" aria-hidden="true"></span>
+</button>
+{% endmacro %}
+
+
 {% macro story(s, show_country=True, i=0, no=1) %}
 <article class="story" style="--w: {{ s.score }}; --i: {{ i if i < 20 else 20 }}" data-tier="{{ s.tier }}"
          data-score="{{ s.score }}" data-day="{{ s.day }}"
          data-find="{{ s.title|lower }} {{ s.country_ru|lower }} {{ s.domain }} {% for e in s.entities %}{{ ru_name(e)|lower }} {% endfor %}">
   <div class="story__sig">
     <span class="story__no">{{ no }}</span>
+    {{ keep() }}
   </div>
 
   <div class="story__body">
@@ -132,6 +163,7 @@
     {{ snippet(s) }}
     {{ ents(s.entities) }}
     {{ sources(s) }}
+    {{ akin(s) }}
   </div>
 </article>
 {% endmacro %}

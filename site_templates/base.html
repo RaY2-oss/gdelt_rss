@@ -113,6 +113,14 @@
       <kbd class="jump__kbd" aria-hidden="true">/</kbd>
     </button>
 
+    {# Показывается, только когда что-то отложено: пустая кнопка в шапке ничего
+       не обещает и ничего не делает. #}
+    <button class="kept-btn" type="button" aria-controls="kept" aria-expanded="false"
+            title="Отложенное (клавиша o)" hidden>
+      <span class="kept-btn__ico" aria-hidden="true"></span>
+      <b class="kept-btn__n" data-kept-n>0</b>
+    </button>
+
     <button class="theme" type="button" aria-label="Переключить тему" title="Светлая / тёмная тема">
       <span class="theme__dot" aria-hidden="true"></span>
     </button>
@@ -201,6 +209,57 @@
       <p class="find__stat" data-find-stat></p>
       <ol class="find__list" data-find-list></ol>
     </div>
+  </div>
+</div>
+
+{# Отложенное. Список хранится в localStorage браузера: сервера у витрины нет,
+   заводить его ради закладок незачем, и это стоит сказать прямо — иначе
+   человек ждёт, что список найдётся на другом устройстве. #}
+<div class="kept" id="kept" hidden>
+  <div class="kept__panel">
+    <div class="kept__head">
+      <span class="kept__ttl">Отложенное</span>
+      <button class="kept__close" type="button" aria-label="Закрыть">×</button>
+    </div>
+    <p class="kept__note">Список живёт в этом браузере и никуда не отправляется.</p>
+    <ol class="kept__list" data-kept-list></ol>
+    {# Кнопка-закладка проявляется по наведению, поэтому заглушка называет и
+       клавишу: иначе способ отложить сюжет виден только тому, кто уже водил
+       мышью по строке. #}
+    <p class="kept__empty" data-kept-empty>Пока пусто. Отложить сюжет — кнопка слева от строки или клавиша <kbd>s</kbd>.</p>
+    <button class="kept__clear" type="button" data-kept-clear hidden>Очистить список</button>
+  </div>
+</div>
+
+{# Клавиши. Одиночные буквы можно выключить — этого требует WCAG 2.1.4
+   (Character Key Shortcuts): у читателя с экранным диктором или речевым
+   вводом одиночная буква уходит своей программе, а не странице. Выключатель
+   стоит здесь же, а не в отдельных настройках, которых у витрины нет. #}
+<div class="help" id="help" hidden>
+  <div class="help__panel">
+    <div class="help__head">
+      <span class="help__ttl">Клавиши</span>
+      <button class="help__close" type="button" aria-label="Закрыть">×</button>
+    </div>
+    <dl class="help__list">
+      <div class="help__row"><dt><kbd>j</kbd><kbd>k</kbd></dt><dd>следующий и предыдущий сюжет</dd></div>
+      <div class="help__row"><dt><kbd>Enter</kbd></dt><dd>открыть сюжет в издании</dd></div>
+      <div class="help__row"><dt><kbd>e</kbd></dt><dd>развернуть статью целиком</dd></div>
+      <div class="help__row"><dt><kbd>s</kbd></dt><dd>отложить сюжет</dd></div>
+      <div class="help__row"><dt><kbd>o</kbd></dt><dd>список отложенного</dd></div>
+      <div class="help__row"><dt><kbd>←</kbd><kbd>→</kbd></dt><dd>листать ленту</dd></div>
+      <div class="help__row"><dt><kbd>/</kbd></dt><dd>поиск по всему архиву</dd></div>
+      <div class="help__row"><dt><kbd>a</kbd></dt><dd>атлас</dd></div>
+      <div class="help__row"><dt><kbd>t</kbd></dt><dd>светлая или тёмная тема</dd></div>
+      <div class="help__row"><dt><kbd>?</kbd></dt><dd>эта справка</dd></div>
+      <div class="help__row"><dt><kbd>Esc</kbd></dt><dd>закрыть открытое</dd></div>
+    </dl>
+    <label class="help__off">
+      <input type="checkbox" data-hotkeys checked>
+      <span>Одиночные клавиши включены</span>
+    </label>
+    <p class="help__why">Выключите, если буквы перехватывает экранный диктор или речевой ввод.
+      Стрелки, <kbd>Tab</kbd> и <kbd>Esc</kbd> работают всегда.</p>
   </div>
 </div>
 

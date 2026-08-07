@@ -1,7 +1,8 @@
-// Шесть мелочей, ради которых не нужен фреймворк: атлас, поиск по всему
-// корпусу, полоса дат, фильтр по видимой ленте, переключатель темы и кнопка
-// атласа, проявляющаяся после прокрутки. Всё остальное на странице —
-// статический HTML, а движение — на CSS (см. animation-timeline в style.css).
+// Приборы витрины, ради которых не нужен фреймворк: атлас, поиск по всему
+// корпусу, полоса дат, фильтр по видимой ленте, листалка, отложенное,
+// похожие сюжеты, клавиатура и переключатель темы. Всё остальное на
+// странице — статический HTML, а движение — на CSS (см. animation-timeline
+// в style.css).
 (function () {
   'use strict';
 
@@ -394,6 +395,309 @@
     if (reset) reset.addEventListener('click', function () { mark(0, btns.length - 1); });
   }
 
+  // ── Отложенное ────────────────────────────────────────────────────────
+  // Список закладок живёт в localStorage браузера. Сервера у витрины нет —
+  // после часовой сборки всё раздаёт nginx, — поэтому «сохранить у себя»
+  // здесь означает буквально у себя, и панель об этом честно предупреждает.
+  // Запись самодостаточна (заголовок, страна, издание, дата): панель
+  // рисуется без корпуса, а отложенный сюжет переживает своё выпадение из
+  // архива — ссылка на издание остаётся рабочей.
+  var KEPT = 'kept', KEPT_MAX = 200;
+  var keptBox = document.getElementById('kept');
+  var keptBtn = q$('.kept-btn');
+
+  var keptRead = function () {
+    try {
+      var v = JSON.parse(localStorage.getItem(KEPT));
+      return v && v.length ? v : [];
+    } catch (e) { return []; }
+  };
+
+  var keptWrite = function (list) {
+    try { localStorage.setItem(KEPT, JSON.stringify(list.slice(0, KEPT_MAX))); } catch (e) {}
+  };
+
+  // Строка ленты → запись. Работает и для карточек из разметки, и для
+  // хвостовых: у обеих одни и те же классы, других строк на витрине нет.
+  var keptOf = function (art) {
+    var lnk = art && art.querySelector('.story__link');
+    if (!lnk) return null;
+    var cty = art.querySelector('.story__country');
+    var when = art.querySelector('.story__time');
+    var outlet = art.querySelector('.story__solo a, .story__sources a, .story__source');
+    // На странице страны колонки со страной у строк нет — она в заголовке
+    // страницы, и без неё запись в панели была бы безымянной.
+    var ttl = document.body.dataset.country ? q$('.page__title') : null;
+    return {
+      u: lnk.href,
+      t: lnk.textContent.trim(),
+      c: cty ? cty.textContent.trim() : (ttl ? ttl.textContent.trim() : ''),
+      s: outlet ? outlet.textContent.trim() : '',
+      d: when ? (when.getAttribute('datetime') || '').slice(0, 10) : ''
+    };
+  };
+
+  var keepBtn = function () {
+    var kb = el('button', 'keep');
+    kb.type = 'button';
+    kb.dataset.keep = '';
+    kb.setAttribute('aria-pressed', 'false');
+    kb.setAttribute('aria-label', 'Отложить сюжет');
+    kb.appendChild(el('span', 'keep__ico'));
+    return kb;
+  };
+
+  var keptSet = null;   // адреса отложенного; пересобирается при каждой правке
+
+  var keepMark = function (art) {
+    var mb = art.querySelector('[data-keep]');
+    var ml = art.querySelector('.story__link');
+    if (!mb || !ml) return;
+    var isOn = !!keptSet[ml.href];
+    mb.setAttribute('aria-pressed', isOn ? 'true' : 'false');
+    mb.title = isOn ? 'Убрать из отложенного' : 'Отложить (клавиша s)';
+    art.classList.toggle('is-kept', isOn);
+  };
+
+  var keptDraw = function () {
+    var saved = keptRead();
+    keptSet = {};
+    saved.forEach(function (r) { keptSet[r.u] = 1; });
+    all('.story').forEach(keepMark);
+
+    if (keptBtn) {
+      keptBtn.hidden = !saved.length;
+      var num = keptBtn.querySelector('[data-kept-n]');
+      if (num) num.textContent = saved.length;
+      keptBtn.title = 'Отложенное: ' + saved.length + ' (клавиша o)';
+    }
+    if (!keptBox) return;
+
+    var pane = keptBox.querySelector('[data-kept-list]');
+    var blank = keptBox.querySelector('[data-kept-empty]');
+    var wipe = keptBox.querySelector('[data-kept-clear]');
+    if (blank) blank.hidden = !!saved.length;
+    if (wipe) wipe.hidden = !saved.length;
+    if (!pane) return;
+    pane.textContent = '';
+    saved.forEach(function (r) {
+      var li = el('li', 'kept__item');
+      var a = el('a', 'kept__link', r.t);
+      a.href = r.u;
+      a.rel = 'noopener nofollow';
+      li.appendChild(a);
+      var m = el('p', 'kept__meta');
+      if (r.c) m.appendChild(el('span', 'kept__country', r.c));
+      if (r.s) m.appendChild(el('span', 'kept__src', r.s));
+      if (r.d) m.appendChild(el('span', 'kept__day', dm(r.d)));
+      li.appendChild(m);
+      var off = el('button', 'kept__off', '×');
+      off.type = 'button';
+      off.dataset.keptOff = r.u;
+      off.setAttribute('aria-label', 'Убрать из отложенного');
+      li.appendChild(off);
+      pane.appendChild(li);
+    });
+  };
+
+  var keptToggle = function (art) {
+    var rec = keptOf(art);
+    if (!rec) return;
+    var was = keptRead();
+    var next = was.filter(function (r) { return r.u !== rec.u; });
+    if (next.length === was.length) next.unshift(rec);
+    keptWrite(next);
+    keptDraw();
+  };
+
+  var setKept = function (open) {
+    if (!keptBox) return;
+    keptBox.hidden = !open;
+    root.classList.toggle('is-kept-open', open);
+    if (keptBtn) keptBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+      var shut = keptBox.querySelector('.kept__close');
+      if (shut) shut.focus();
+    }
+  };
+
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest) return;
+    var kp = e.target.closest('[data-keep]');
+    if (kp) { keptToggle(kp.closest('.story')); return; }
+    var off = e.target.closest('[data-kept-off]');
+    if (off) {
+      keptWrite(keptRead().filter(function (r) { return r.u !== off.dataset.keptOff; }));
+      keptDraw();
+      return;
+    }
+    if (e.target.closest('[data-kept-clear]')) { keptWrite([]); keptDraw(); return; }
+    if (keptBtn && e.target.closest('.kept-btn')) {
+      setKept(keptBox.hidden);
+      return;
+    }
+    if (keptBox && (e.target === keptBox || e.target.closest('.kept__close'))) setKept(false);
+  });
+
+  keptDraw();
+
+  // ── Похожие сюжеты ────────────────────────────────────────────────────
+  // Соседей считает сборка (akin в site.py) по эмбеддингу тела статьи, а
+  // лежат они в корпусе — индексами в том же массиве, что и сам поиск.
+  // В разметке у строки только их число: шесть тысяч сюжетов по четыре
+  // ссылки — четверть мегабайта, которую почти никто не раскроет.
+  var akinAt = null;   // адрес → номер в корпусе
+
+  var akinBox = function (n) {
+    var det = el('details', 'akin');
+    det.dataset.akin = '';
+    var cap = el('summary', 'akin__sum', 'Похожие сюжеты');
+    cap.appendChild(el('b', null, n));
+    det.appendChild(cap);
+    var ol = el('ol', 'akin__list');
+    ol.dataset.akinList = '';
+    ol.appendChild(el('li', 'akin__wait', 'Ищем…'));
+    det.appendChild(ol);
+    return det;
+  };
+
+  var akinRow = function (j, i) {
+    var row = j.s[i];
+    var li = el('li', 'akin__item');
+    var ln = el('a', 'akin__link', row[0]);
+    ln.href = row[4];
+    ln.rel = 'noopener nofollow';
+    li.appendChild(ln);
+    var mt = el('p', 'akin__meta');
+    var cl = el('a', 'akin__country', j.c[row[1]][1]);
+    cl.href = '/c/' + j.c[row[1]][0] + '.html';
+    mt.appendChild(cl);
+    mt.appendChild(el('span', 'akin__src', row[5]));
+    var tm = el('time', 'akin__day', dm(j.d[row[2]]));
+    tm.dateTime = j.d[row[2]];
+    mt.appendChild(tm);
+    li.appendChild(mt);
+    return li;
+  };
+
+  var akinFill = function (det) {
+    if (det.dataset.akin === 'done') return;
+    det.dataset.akin = 'done';
+    var host = det.closest('.story');
+    var al = host && host.querySelector('.story__link');
+    var slot = det.querySelector('[data-akin-list]');
+    if (!al || !slot) return;
+    loadCorpus().then(function (j) {
+      if (!akinAt) {
+        akinAt = {};
+        for (var i = 0; i < j.s.length; i++) akinAt[j.s[i][4]] = i;
+      }
+      var at = akinAt[al.href];
+      var near = at == null ? [] : (j.k && j.k[at]) || [];
+      slot.textContent = '';
+      if (!near.length) {
+        slot.appendChild(el('li', 'akin__wait', 'Похожего в архиве не нашлось.'));
+        return;
+      }
+      near.forEach(function (i) { slot.appendChild(akinRow(j, i)); });
+    });
+  };
+
+  // toggle не всплывает — отсюда и перехват на погружении.
+  document.addEventListener('toggle', function (e) {
+    var box2 = e.target;
+    if (box2 && box2.open && box2.classList &&
+        box2.classList.contains('akin')) akinFill(box2);
+  }, true);
+
+  // ── Клавиши: чтение без мыши ──────────────────────────────────────────
+  // Одиночные буквы выключаются (WCAG 2.1.4 Character Key Shortcuts): у
+  // читателя с экранным диктором или речевым вводом буква уходит своей
+  // программе, а не странице. Выключатель — в самой справке, других настроек
+  // у витрины нет. Стрелки, Tab и Esc не выключаются никогда: без них
+  // страница вообще перестанет слушаться клавиатуры.
+  var HOT = 'hotkeys';
+  var hot = true;
+  try { hot = localStorage.getItem(HOT) !== 'off'; } catch (e) {}
+
+  var help = document.getElementById('help');
+  var hotBox = help && help.querySelector('[data-hotkeys]');
+
+  var setHelp = function (open) {
+    if (!help) return;
+    help.hidden = !open;
+    root.classList.toggle('is-help', open);
+    if (open) {
+      var x = help.querySelector('.help__close');
+      if (x) x.focus();
+    }
+  };
+
+  if (hotBox) {
+    hotBox.checked = hot;
+    hotBox.addEventListener('change', function () {
+      hot = hotBox.checked;
+      try { localStorage.setItem(HOT, hot ? 'on' : 'off'); } catch (e) {}
+    });
+  }
+  if (help) {
+    help.addEventListener('click', function (e) {
+      if (e.target === help || (e.target.closest && e.target.closest('.help__close'))) setHelp(false);
+    });
+  }
+
+  var typing = function (t) {
+    var tag = (t && t.tagName || '').toLowerCase();
+    return tag === 'input' || tag === 'textarea' || tag === 'select' ||
+      !!(t && t.isContentEditable);
+  };
+
+  // Фокус переносится на саму строку, а не на её ссылку: диктор тогда читает
+  // сюжет целиком — заголовок, важность, страну, — а не один заголовок.
+  var atStory = function () {
+    var a = document.activeElement;
+    return a && a.closest ? a.closest('.story') : null;
+  };
+
+  var step = function (d) {
+    var vis = all('.story').filter(function (n) { return !n.hidden; });
+    if (!vis.length) return;
+    var was2 = vis.indexOf(atStory());
+    var nx = was2 < 0 ? (d > 0 ? 0 : vis.length - 1) : was2 + d;
+    if (nx < 0 || nx >= vis.length) return;
+    var node = vis[nx];
+    node.tabIndex = -1;
+    node.focus({ preventScroll: true });
+    node.scrollIntoView({ block: 'center', behavior: calm.matches ? 'auto' : 'smooth' });
+  };
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      if (help && !help.hidden) setHelp(false);
+      else if (keptBox && !keptBox.hidden) setKept(false);
+      return;                        // поиск и атлас закрывает свой обработчик
+    }
+    if (e.metaKey || e.ctrlKey || e.altKey || typing(e.target)) return;
+    if (e.key === '?') { e.preventDefault(); setHelp(true); return; }
+    if (!hot || root.classList.contains('is-find')) return;
+
+    var cur = atStory();
+    if (e.key === 'j') { e.preventDefault(); step(1); }
+    else if (e.key === 'k') { e.preventDefault(); step(-1); }
+    else if (e.key === 'o') { e.preventDefault(); setKept(keptBox && keptBox.hidden); }
+    else if (e.key === 'a' && atlasBtn) { e.preventDefault(); atlasBtn.click(); }
+    else if (e.key === 't') { e.preventDefault(); var th = q$('.theme'); if (th) th.click(); }
+    else if (!cur) return;
+    else if (e.key === 's') { e.preventDefault(); keptToggle(cur); }
+    else if (e.key === 'e') {
+      var full = cur.querySelector('.full');
+      if (full) { e.preventDefault(); full.open = !full.open; }
+    } else if (e.key === 'Enter' && document.activeElement === cur) {
+      var link = cur.querySelector('.story__link');
+      if (link) { e.preventDefault(); link.click(); }
+    }
+  });
+
   // ── Лента: фильтр и листалка ──────────────────────────────────────────
   // Одна выборка, один рисовальщик. Слово, даты и номер страницы режут один и
   // тот же список, поэтому и решение о показе строки принимается в одном
@@ -450,7 +754,7 @@
           var s = j.s[i];
           if (scope && scope.indexOf(s[1]) < 0) continue;
           if (mine[s[4]]) continue;
-          tail.push({ s: s, hay: j.hay[i], day: j.d[s[2]] });
+          tail.push({ s: s, hay: j.hay[i], day: j.d[s[2]], at: i });
         }
         if (pgBox) pgBox.classList.remove('is-loading');
         // теперь гистограмма считается по всей глубине, а не по сотне
@@ -475,6 +779,7 @@
       art.dataset.day = t.day;
       var sig = el('div', 'story__sig');
       sig.appendChild(el('span', 'story__no', no));
+      sig.appendChild(keepBtn());
       art.appendChild(sig);
 
       var body = el('div', 'story__body');
@@ -519,7 +824,12 @@
         });
         body.appendChild(ul);
       }
+      // Похожие — той же разметкой, что и у строк из шаблона: раскрытие и
+      // заполнение делает общий обработчик, номер соседей уже под рукой.
+      var near = CORPUS.k && CORPUS.k[t.at];
+      if (near && near.length) body.appendChild(akinBox(near.length));
       art.appendChild(body);
+      keepMark(art);
       return art;
     };
 

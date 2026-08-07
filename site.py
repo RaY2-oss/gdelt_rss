@@ -68,6 +68,22 @@ SITE_HOURS = SITE_DAYS * 24
 HOME_LIMIT = 100       # сюжетов в разметке главной
 REGION_LIMIT = 100     # сюжетов в разметке региона
 COUNTRY_LIMIT = 100    # сюжетов в разметке страны
+
+# Похожие сюжеты. Дедуп фида работает внутри страны — url лежит ровно под
+# одной, — поэтому один и тот же запуск ракеты в индийской и японской подаче
+# остаётся двумя сюжетами. Для ленты это правильно, а здесь ровно то, что и
+# стоит показать: то же событие глазами соседа.
+#
+# Порог выбран по корпусу, а не на глаз: у e5 высокий пол сходства, лучший
+# сосед сидит в узкой полосе (медиана 0.886, четверть корпуса выше 0.901).
+# На 0.86 сосед находился у 93 % сюжетов, и это была одна отрасль, а не одно
+# событие: «ИИ в налоговой Пакистана» ходило в паре с «законом о цифровом
+# удостоверении». С 0.90 остаётся 27 % — зато это IPO CXMT в двух подачах и
+# американские пошлины на поликремний глазами Китая и Тайваня. Блок, который
+# есть у каждого четвёртого и всегда по делу, полезнее блока у каждого и
+# наугад. Выше 0.93 начинаются почти дубли, но их и так мержит DEDUP_COSINE.
+AKIN_TOP = 4           # сколько похожих держим у сюжета
+AKIN_FLOOR = 0.90      # ниже — уже не «то же самое», а просто одна отрасль
 ENTITY_TOP = 14        # субъектов в блоке «кто в новостях»
 POPULAR_TOP = 12       # имён-подсказок под строкой поиска
 
@@ -450,6 +466,10 @@ def stories(conn, rows, country, now):
             "entities": [e for e in (ents or "").split(";") if e][:4],
             "country": country,
             "country_ru": RU_COUNTRY.get(country, settings.country_display(country)),
+            # Эмбеддинг тела головной статьи — только чтобы посчитать похожие
+            # (akin) в build; в шаблон и в JSON он не попадает.
+            "vec": imp.body_emb(members[0][10], members[0][6])
+            if (members[0][10] or members[0][6]) else None,
         })
     # Одна фиксация на страну, а не на сюжет: обзоров пишется несколько тысяч,
     # и транзакция на каждый стоила бы дороже самой сборки.
@@ -495,7 +515,40 @@ def popular_names(items, limit=POPULAR_TOP):
     return out
 
 
-def search_index(everything, regions):
+def akin(everything, top=AKIN_TOP, floor=AKIN_FLOOR):
+    """Похожие сюжеты: для каждого — индексы ближайших по эмбеддингу тела.
+
+    Соседи ищутся по всему корпусу, а не внутри страны: сюжет с высоким
+    сходством из другой страны — это, как правило, то же событие в чужой
+    подаче, и увести к нему читателя ценнее, чем к соседней строке той же
+    ленты, которую он и так видит.
+
+    Эмбеддинги забираются из сюжетов насовсем (pop): дальше они нигде не
+    нужны, а держать шесть тысяч векторов до конца сборки незачем.
+    """
+    import numpy as np
+    vecs = [s.pop("vec", None) for s in everything]
+    out = [[] for _ in vecs]
+    have = [i for i, v in enumerate(vecs) if v is not None and v.size]
+    k = min(top, len(have) - 1)
+    if k < 1:
+        return out
+
+    m = np.asarray([vecs[i] for i in have], np.float32)
+    m /= np.linalg.norm(m, axis=1, keepdims=True).clip(1e-6)
+    # Кусками по 512 строк: вся матрица косинусов 6384×6384 — это 160 МБ ради
+    # четырёх чисел на строку.
+    for lo in range(0, len(have), 512):
+        sim = m[lo:lo + 512] @ m.T
+        for r, row in enumerate(sim):
+            row[lo + r] = -1                       # сам себе не сосед
+            near = np.argpartition(-row, k)[:k]
+            near = near[np.argsort(-row[near])]
+            out[have[lo + r]] = [have[j] for j in near if row[j] >= floor]
+    return out
+
+
+def search_index(everything, regions, near=None):
     """Индекс для поиска по всему корпусу — то, чего на странице нет.
 
     Каждая страница носит с собой только свою ленту, а искать читатель хочет
@@ -535,6 +588,10 @@ def search_index(everything, regions):
         "s": [[s["title"], ci[s["country"]], di[s["day"]], s["score"],
                s["url"], s["domain"], ";".join(s["entities"])]
               for s in everything],
+        # Похожие сюжеты — индексы в том же массиве s. Лежат здесь, а не в
+        # разметке: показываются по требованию, и корпус к этому моменту уже
+        # загружен (см. akin в app.js).
+        "k": near or [],
     }
 
 
@@ -689,6 +746,13 @@ def build(out_dir=OUT_DIR):
         everything = [s for items in by_country.values() for s in items]
         everything.sort(key=lambda s: (s["score"], s["outlets"]), reverse=True)
 
+        # Похожие сюжеты считаются один раз на всю сборку и живут в search.json
+        # индексами; сюжету остаётся только их число — по нему шаблон решает,
+        # рисовать ли строку «Похожие сюжеты» вообще.
+        near = akin(everything)
+        for item, rel in zip(everything, near):
+            item["akin"] = len(rel)
+
         # Русские имена субъектов — одним пакетом на всю сборку, а не по стране:
         # имена повторяются между странами, и общий список даёт и кэшу, и пулу
         # потоков полную загрузку (см. entity_ru).
@@ -755,7 +819,7 @@ def build(out_dir=OUT_DIR):
     os.makedirs(out_dir, exist_ok=True)
     # Индекс поиска: весь корпус архива, а не то, что попало на страницу.
     _write(os.path.join(out_dir, "search.json"),
-           json.dumps(search_index(everything, regions),
+           json.dumps(search_index(everything, regions, near),
                       ensure_ascii=False, separators=(",", ":")))
 
     lead = everything[0] if everything else None
@@ -897,6 +961,21 @@ def _selfcheck():
     assert s["day"] == now.strftime("%Y-%m-%d") == days(now)[0]["key"], s["day"]
     [s] = stories(None, [_row(None, None)], "south_korea", now)
     assert s["title"] == "Korean title" and s["lang_code"] == "en"
+
+    # Похожие сюжеты: близкие по вектору находят друг друга, далёкий не
+    # притягивается ни к кому, а сюжет без эмбеддинга не роняет расчёт.
+    # Вектор из сюжета уходит насовсем — иначе он уехал бы в шаблон.
+    def _v(a, b):
+        w = np.zeros(settings.EMBEDDING_DIM, np.float32)
+        w[0], w[1] = a, b
+        return w
+    pool = [{"vec": _v(1, 0)}, {"vec": _v(0.99, 0.14)}, {"vec": _v(0, 1)},
+            {"vec": None}]
+    rel = akin(pool, top=2)
+    assert rel[0][:1] == [1] and rel[1][:1] == [0], rel
+    assert rel[2] == [] and rel[3] == [], rel
+    assert all("vec" not in p for p in pool), "вектор остался в сюжете"
+    assert akin([{"vec": _v(1, 0)}]) == [[]], "один сюжет — соседей нет"
 
     # app.js — одна функция на весь файл, поэтому var из блока листалки и var
     # из блока подсказок живут в общей области. Совпади имена — второе

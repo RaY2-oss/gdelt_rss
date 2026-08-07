@@ -24,6 +24,16 @@
       за {{ status.days }} {{ status.days|plural('день','дня','дней') }}{% if total > items|length %}, показаны верхние {{ items|length }}{% endif %}.
     </p>
     {% endif %}
+
+    {# Фиды этой страны. Витрина выросла из RSS-конвейера, а подписаться на
+       страну было негде: адреса знали только 178 подписок читалки. Оба —
+       полный и отобранный: «важное» отбирает судья-LLM, и это разные ленты,
+       а не одна с обрезанным хвостом. #}
+    <p class="page__rss">
+      <span class="page__rsscap">RSS:</span>
+      <a class="page__rsslink" href="{{ feed_base }}/{{ country }}.xml">всё</a>
+      <a class="page__rsslink" href="{{ feed_base }}/{{ country }}_digest.xml">только важное</a>
+    </p>
   </header>
 
   {% if entities %}

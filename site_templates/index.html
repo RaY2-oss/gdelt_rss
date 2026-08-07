@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_story.html" import feed, tools, snippet, ents, sources, digest %}
+{% from "_story.html" import feed, tools, snippet, ents, sources, digest, akin, keep %}
 {% from "_map.html" import radar %}
 {% set home = True %}
 
@@ -46,6 +46,7 @@
            data-find="{{ lead.title|lower }} {{ lead.country_ru|lower }} {{ lead.domain }}">
     <div class="story__sig">
       <span class="story__no">1</span>
+      {{ keep() }}
     </div>
 
     <div class="story__body">
@@ -68,6 +69,7 @@
       {{ snippet(lead) }}
       {{ ents(lead.entities) }}
       {{ sources(lead) }}
+      {{ akin(lead) }}
     </div>
   </article>
   {% endif %}
