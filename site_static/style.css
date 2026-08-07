@@ -777,8 +777,9 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
 
 /* Карта охвата. Границы стран — готовые пути SVG (см. make_borders.py): один
    раз пережёванный Natural Earth 110m лежит в разметке страницы, а не
-   собирается в браузере библиотекой карт. Сетка на подложке — параллели и
-   меридианы через 10°, чтобы континенты стояли на чём-то. */
+   собирается в браузере библиотекой карт. Сетка приходит оттуда же путями:
+   проекция равновеликая, у неё меридианы кривые, и полосками фона такую сетку
+   не нарисовать. */
 .rmap {
   --grat: color-mix(in oklab, var(--ink) 8%, transparent);
   position: relative;
@@ -788,15 +789,24 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
 
 .rmap__field {
   position: relative;
-  aspect-ratio: 167 / 85;
+  /* пропорция кадра приходит из data/borders.json вместе с геометрией: если
+     рамку карты когда-нибудь подвинут, картинка не должна поехать */
+  aspect-ratio: var(--mw, 3) / var(--mh, 2);
   background-color: var(--panel-sunk);
-  background-image:
-    repeating-linear-gradient(0deg, var(--grat) 0 1px, transparent 1px 11.76%),
-    repeating-linear-gradient(90deg, var(--grat) 0 1px, transparent 1px 5.99%);
   border: 1px solid var(--rule);
   border-radius: var(--r);
 }
 .rmap__svg { display: block; width: 100%; height: 100%; }
+
+/* Сетка. Проведена той же проекцией, что и берега, поэтому меридианы сходятся
+   к полюсам, а не стоят частоколом. Лежит под сушей: море показывает сетку,
+   земля её накрывает. */
+.rmap__grid {
+  fill: none;
+  stroke: var(--grat);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
 
 /* Соседи по кадру — только контур: они не открываются и не должны спорить за
    внимание со странами охвата. */
@@ -2287,51 +2297,59 @@ html.is-theming::view-transition-new(root) {
   100% { transform: translateX(100%); opacity: 0; }
 }
 
-/* ── Развёртка карты ──────────────────────────────────────────────────── */
-/* Луч обходит карту по кругу, и каждая страна вспыхивает, когда он через неё
-   проходит. Задержку вспышки app.js берёт из угла страны относительно центра
-   карты — то есть страны загораются в том порядке, в каком их реально
-   встречает луч, а не по списку.
+/* ── Рассвет над картой ───────────────────────────────────────────────── */
+/* Вместо кругового луча — терминатор: наклонная полоса света идёт с запада на
+   восток, и страна проступает ровно тогда, когда до неё доходит утро.
+   Задержку app.js берёт из положения страны по долготе (--px, доля ширины
+   кадра), так что порядок задаёт география, а не список.
+   Идёт один раз — при раскрытии атласа или при появлении карты в кадре: свет,
+   который ходит по кругу непрерывно, через минуту читается как индикатор
+   загрузки.
 
-   Ради этого всё и затевалось: витрина называется «Пеленг», и до сих пор это
-   было только словом в комментарии. Идёт один раз — при раскрытии карты или
-   при её появлении в кадре, — и больше не повторяется: развёртка, которая
-   крутится непрерывно, через минуту читается как индикатор загрузки. */
+   Прежний вариант (луч по кругу) отсюда убран по двум причинам, и обе
+   назывались одним словом «тормозит». Первая: вспышка страны шла через
+   filter с drop-shadow — восемьдесят девять размытий в кадре, и каждое
+   считается заново на каждом кадре. Вторая: луч гас на 88 % своего оборота,
+   а задержки стран доходили до 100 %, поэтому последняя дюжина загоралась
+   уже в темноте — это и читалось как «не до конца доходит».
+   Здесь движется ровно один элемент и ровно двумя свойствами, которые
+   компоновщик умеет делать без перерисовки, а последняя страна встречает
+   свет за 0,15 с до его ухода за кадр. */
 .rmap__field { position: relative; overflow: hidden; }
 .rmap__field::after {
   content: '';
   position: absolute;
-  inset: -30%;
+  top: -20%;
+  bottom: -20%;
+  left: 0;
+  width: 34%;
   pointer-events: none;
   opacity: 0;
-  background: conic-gradient(from 0deg,
-    color-mix(in oklab, var(--sig-3) 48%, transparent) 0deg,
-    color-mix(in oklab, var(--sig-3) 10%, transparent) 18deg,
-    transparent 40deg, transparent 360deg);
-  /* farthest-side, а не closest-side: карта вдвое шире своей высоты, и по
-     короткой стороне луч гас, не дойдя до Африки и Японии. */
-  mask-image: radial-gradient(farthest-side, #000 22%, transparent 96%);
+  will-change: transform;
+  background: linear-gradient(90deg,
+    transparent 0,
+    color-mix(in oklab, var(--sig-3) 16%, transparent) 45%,
+    color-mix(in oklab, var(--sig-3) 42%, transparent) 72%,
+    color-mix(in oklab, var(--sig-3) 60%, transparent) 88%,
+    transparent 100%);
 }
 @media (prefers-reduced-motion: no-preference) {
-  .rmap__field.is-sweep::after { animation: sweep 1.6s var(--ease) both; }
-  .rmap__field.is-sweep .rmap__land path,
-  .rmap__field.is-sweep .rmap__land circle {
-    animation: ping 0.7s ease both;
-    animation-delay: calc(var(--ang, 0) * 1.6s);
+  .rmap__field.is-sweep::after { animation: dawn 2.05s linear both; }
+  /* Страна проступает под светом. Только прозрачность: transform у фигуры
+     внутри SVG считается от начала координат карты, и страна улетела бы в
+     угол. 0,06 и 1,53 — не на глаз: при ширине полосы 34 % кадра и ходе в
+     395 % своей ширины её светлая кромка приходит на левый край кадра на
+     0,06 с, а на правый — на 1,53 с. */
+  .rmap__field.is-sweep .rmap__land {
+    animation: ink 0.5s ease backwards;
+    animation-delay: calc(0.06s + var(--px, 0) * 1.53s);
   }
 }
-@keyframes sweep {
-  0% { opacity: 0; transform: rotate(-20deg); }
-  12% { opacity: 1; }
+@keyframes dawn {
+  0% { opacity: 0; transform: translateX(-100%); }
+  7% { opacity: 1; }
   88% { opacity: 1; }
-  100% { opacity: 0; transform: rotate(345deg); }
-}
-/* Вспышка через filter, а не через fill: заливка страны несёт её ступень, и
-   перебивать её на время развёртки — значит на секунду соврать про величину. */
-@keyframes ping {
-  0% { filter: none; }
-  22% { filter: brightness(1.55) saturate(1.5) drop-shadow(0 0 6px var(--sig-3)); }
-  100% { filter: none; }
+  100% { opacity: 0; transform: translateX(295%); }
 }
 
 /* ── Пружины на отклике ───────────────────────────────────────────────── */

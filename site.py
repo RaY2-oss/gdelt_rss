@@ -98,58 +98,14 @@ REGIONS = [
       "namibia", "madagascar", "malawi", "mauritius"]),
 ]
 
-# Центроиды стран, градусы (долгота, широта). Карта на главной рисует страны в
-# границах (data/borders.json), но на 110-м масштабе Сингапуру, Бахрейну,
-# Гонконгу, Макао, Мальдивам и Маврикию фигуры не досталось — они остаются
-# точками вот отсюда. Микрогосударства чуть разведены руками: в масштабе 166°
-# разница в полградуса — это три пикселя, и точки слипались.
-GEO = {
-    "india": (79, 22), "pakistan": (69, 30), "bangladesh": (90, 24),
-    "sri_lanka": (81, 7.5), "nepal": (84, 28.4), "bhutan": (90.5, 27.6),
-    "maldives": (73, 3.5), "afghanistan": (66, 34),
-    "indonesia": (113, -2.5), "malaysia": (101.5, 4.2), "singapore": (104.4, 0.4),
-    "thailand": (100.5, 15), "vietnam": (106.5, 16), "philippines": (122, 12),
-    "myanmar": (96, 21), "cambodia": (105, 12.4), "laos": (102.8, 18.6),
-    "brunei": (115.4, 5.4), "east_timor": (125.7, -8.8),
-    "china": (104, 35), "japan": (138, 36.5), "south_korea": (127.8, 36),
-    "north_korea": (127, 40.3), "mongolia": (103, 46.5), "taiwan": (121, 23.7),
-    "hong_kong": (115.6, 22.6), "macau": (112, 20.6),
-    "kazakhstan": (67, 48), "uzbekistan": (64, 41.5), "turkmenistan": (59, 39),
-    "kyrgyzstan": (74.7, 41.5), "tajikistan": (71, 38.6),
-    "turkey": (35, 39), "iran": (53, 32), "iraq": (44, 33),
-    "saudi_arabia": (45, 24), "uae": (54.8, 23.4), "israel": (34.9, 31.5),
-    "qatar": (51.6, 24.8), "kuwait": (47.8, 29.6), "oman": (56.5, 21),
-    "bahrain": (50.2, 26.6), "jordan": (36.6, 31), "lebanon": (35.6, 34.2),
-    "syria": (38, 35.2), "yemen": (47.5, 15.5),
-    "egypt": (30, 27), "libya": (17, 27), "tunisia": (9.5, 34),
-    "algeria": (2.6, 28), "morocco": (-6, 32), "sudan": (30, 15.5),
-    "nigeria": (8, 9.5), "ghana": (-1.2, 7.9), "senegal": (-14.4, 14.8),
-    "ivory_coast": (-5.5, 7.5), "mali": (-4, 17.5), "burkina_faso": (-1.7, 12.3),
-    "niger": (9, 17.5), "guinea": (-10.9, 10), "benin": (2.3, 9.3),
-    "togo": (0.9, 8.6), "sierra_leone": (-11.8, 8.5), "liberia": (-9.4, 6.4),
-    "mauritania": (-10.9, 20), "gambia": (-16.6, 12.8),
-    "kenya": (37.9, 0.2), "tanzania": (34.9, -6.4), "uganda": (32.3, 1.4),
-    "ethiopia": (40.5, 9.1), "rwanda": (29.9, -1.9), "somalia": (46.2, 5.2),
-    "south_sudan": (30.2, 7.9), "eritrea": (39.8, 15.2),
-    "cameroon": (12.4, 7.4), "dr_congo": (23.6, -2.9), "congo": (15.8, -0.2),
-    "chad": (18.7, 15.5), "gabon": (11.6, -0.8), "angola": (17.9, -11.2),
-    "south_africa": (24.7, -29), "zimbabwe": (29.2, -19), "zambia": (27.8, -13.1),
-    "mozambique": (35.5, -18.7), "botswana": (24.7, -22.3), "namibia": (17.2, -22.9),
-    "madagascar": (46.9, -18.8), "malawi": (34.3, -13.3), "mauritius": (57.6, -20.3),
-}
-
-# Рамка карты. Шире охвата стран на пару градусов с каждой стороны, чтобы
-# крайние точки (Гамбия, Япония, ЮАР) не липли к краю поля.
-GEO_BOX = (-21, 146, 52, -33)  # запад, восток, север, юг
-
-# Границы стран: готовые пути SVG, собраны из Natural Earth 110m один раз
-# (make_borders.py). Единица — десятая доля градуса от левого верхнего угла
-# рамки, поэтому viewBox карты и есть размер рамки в этих единицах.
+# Карта: готовые пути SVG в проекции Equal Earth, собраны из Natural Earth 110m
+# один раз (make_borders.py). Там же и рамка, и размер кадра, и сетка, и точки
+# шести микрогосударств — здесь ничего не проецируется, чтобы координаты стран
+# и координаты точек не могли разойтись.
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "data", "borders.json")) as _fh:
     BORDERS = json.load(_fh)
-MAP_W = (GEO_BOX[1] - GEO_BOX[0]) * 10
-MAP_H = (GEO_BOX[2] - GEO_BOX[3]) * 10
+MAP_W, MAP_H = BORDERS["w"], BORDERS["h"]
 
 RU_COUNTRY = {
     "india": "Индия", "pakistan": "Пакистан", "bangladesh": "Бангладеш",
@@ -585,16 +541,14 @@ def map_dots(by_country):
     """Карта охвата: страна — своя фигура в границах, заливка по важности.
 
     Границы лежат готовыми путями SVG в data/borders.json (см. make_borders.py)
-    в системе координат карты: десятые доли градуса от левого верхнего угла
-    рамки. Шести микрогосударствам (Сингапур, Бахрейн, Гонконг, Макао,
-    Мальдивы, Маврикий) на 110-м масштабе фигуры не досталось — они остаются
-    точками по координатам GEO, иначе просто исчезли бы с карты.
+    уже в координатах кадра. Шести микрогосударствам (Сингапур, Бахрейн,
+    Гонконг, Макао, Мальдивы, Маврикий) на 110-м масштабе фигуры не досталось —
+    они приходят оттуда же точками, иначе просто исчезли бы с карты.
 
     Заливка — важность верхнего сюжета той же шкалой, что и лента; сколько
     сюжетов, говорит показание при наведении. Точки идут последними и потому
     лежат поверх фигур.
     """
-    west, east, north, south = GEO_BOX
     out = []
     for c, items in by_country.items():
         top = items[0] if items else None
@@ -608,9 +562,7 @@ def map_dots(by_country):
             "d": BORDERS["paths"].get(c, ""),
         }
         if not s["d"]:
-            lon, lat = GEO[c]
-            s["x"] = round((lon - west) * 10)
-            s["y"] = round((north - lat) * 10)
+            s["x"], s["y"] = BORDERS["dots"][c]
         out.append(s)
     # сначала фигуры, потом точки; внутри — по числу сюжетов, чтобы тихая
     # страна не пропадала под шумной соседкой
@@ -763,7 +715,7 @@ def build(out_dir=OUT_DIR):
                lead=lead,
                items=everything[1:HOME_LIMIT], total=len(everything),
                dots=map_dots(by_country), map_rest=BORDERS["rest"],
-               map_w=MAP_W, map_h=MAP_H, **ctx))
+               map_w=MAP_W, map_h=MAP_H, map_grid=BORDERS["grid"], **ctx))
 
     for region in regions:
         _write(os.path.join(out_dir, "r", f"{region['slug']}.html"),
@@ -809,11 +761,10 @@ def _selfcheck():
         f"лишние {sorted(set(mapped) - set(settings.COUNTRIES))}, "
         f"потерянные {sorted(set(settings.COUNTRIES) - set(mapped))}")
     assert set(RU_COUNTRY) == set(settings.COUNTRIES), "нет русского имени страны"
-    assert set(GEO) == set(settings.COUNTRIES), "страна без координат на карте"
 
-    # карта: рамка сходится с той, по которой считаны границы; у всех стран
-    # есть либо фигура, либо точка внутри поля
-    assert BORDERS["box"] == list(GEO_BOX), "границы считаны по другой рамке"
+    # карта: у всех стран есть либо фигура, либо точка, и обе внутри кадра
+    assert 1.3 < MAP_W / MAP_H < 1.7, "кадр карты перекосило"
+    assert BORDERS["grid"].startswith("M"), "сетка карты не собрана"
     dots = map_dots({"india": [{"score": 96, "title": "т"}] * 40,
                      "singapore": [{"score": 40, "title": "т"}],
                      "morocco": []})
