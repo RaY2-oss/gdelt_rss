@@ -37,16 +37,6 @@ CREATE INDEX IF NOT EXISTS idx_articles_country_time ON articles(country, fetche
 CREATE INDEX IF NOT EXISTS idx_articles_unscored ON articles(importance) WHERE importance IS NULL;
 CREATE INDEX IF NOT EXISTS idx_articles_titlehash ON articles(title_hash);
 
--- Сюжеты (по эмбеддингу представителя), уже попавшие в дневной дайджест —
--- чтобы дайджест следующих дней не повторял их (см. digest.py).
-CREATE TABLE IF NOT EXISTS digest_sent (
-    url          TEXT PRIMARY KEY,
-    country      TEXT NOT NULL,
-    digest_date  DATE NOT NULL,
-    embedding    BLOB NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_digest_sent_country ON digest_sent(country);
-
 -- Состояние конвейера. Ключ gkg_cursor — последний ПОЛНОСТЬЮ обработанный
 -- 15-минутный тик GKG. Курсор двигается только после успешной обработки,
 -- поэтому ни один дамп не теряется из-за сбоя, разрыва сети или того, что

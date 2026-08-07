@@ -1,9 +1,15 @@
 # -*- coding: utf-8 -*-
-"""translate_worker.py — фоновый перевод на русский того, что попало в фиды.
+"""translate_worker.py — фоновый перевод на русский того, что видит читатель.
 
-Переводится НЕ весь бэклог, а только статьи, реально ушедшие читателю: те,
-что есть в digest_sent, плюс те, что лежат в текущих XML-фидах. На 22 тысячи
-статей в базе это порядка 12%, разница по времени — сутки против часов.
+Переводится НЕ весь бэклог, а окно витрины: статьи за ARCHIVE_DAYS суток,
+прошедшие гейт релевантности. На 63 тысячи строк в базе это порядка 17%.
+
+Раньше очередь набиралась из digest_sent плюс URL из собранных XML-фидов.
+Недельного дайджеста больше нет, а фид — это сутки, то есть 460 ссылок против
+десяти тысяч на витрине: читатель листает архив за две недели, и очередь по
+фиду оставила бы тринадцать дней из четырнадцати непереведёнными. Витрина
+теперь единственный потребитель, поэтому она же и задаёт очередь — тем же
+запросом, что site.window_rows.
 
 Маршрут ровно один и в два плеча: Google-переводчиком на английский
 (_EN_TOPUP), затем с английского на русский локальной моделью
@@ -17,10 +23,8 @@ opus X→ru, и Google в русскую сторону работали зам�
 Бюджет по времени жёсткий: не успели — оставшееся возьмёт следующий запуск,
 ничего не теряется, потому что очередь это просто "title_ru IS NULL".
 """
-import glob
 import logging
 import os
-import re
 import sys
 import time
 
@@ -34,7 +38,6 @@ log = logging.getLogger("gdelt_rss")
 
 BUDGET_S = int(os.environ.get("TRANSLATE_BUDGET_S", "600"))
 LIMIT = int(os.environ.get("TRANSLATE_LIMIT", "400"))
-_URL_RE = re.compile(r"<link>([^<]+)</link>")
 
 # Английское плечо почти всегда уже посчитано и лежит в базе: его делает
 # конвейер, когда отбирает статью в фид (translate.translate_missing). Чего
@@ -67,23 +70,6 @@ _GOOD = "tcbig-en-ru"
 _WAIT = ["'wait:en:%d'" % i for i in range(1, _EN_TRIES)]
 
 
-def _feed_urls():
-    """URL из собранных XML-фидов. Читаем файлы, а не повторяем логику отбора
-    из feeds.build_country: так перевод не разъедется с тем, что видит
-    подписчик, даже если правила отбора поменяются."""
-    urls = set()
-    out = getattr(settings, "OUTPUT_DIR", None)
-    if not out:
-        return urls
-    for path in glob.glob(os.path.join(out, "*.xml")):
-        try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                urls.update(m.group(1).strip() for m in _URL_RE.finditer(fh.read()))
-        except OSError as exc:
-            log.warning("translate: не читается фид %s: %s", path, exc)
-    return urls
-
-
 # Свежая очередь: перевода нет. Плюс те, кого прошлые прогоны отложили
 # ('wait:en:N') или пометили неподдержанными — теперь маршрут другой, и почти
 # всё из этого переводится.
@@ -97,12 +83,17 @@ def _candidates(conn):
         "SELECT a.url, a.title, a.text, a.language, a.title_en, a.text_en "
         "FROM articles a WHERE " + _FRESH + " "
         "AND (a.title IS NOT NULL OR a.text IS NOT NULL) "
-        "AND a.url IN (SELECT url FROM digest_sent) "
+        # Окно и гейт — те же, что у витрины (site.window_rows). Повторяем
+        # условие, а не импортируем site: воркер бегает раз в 20 минут под nice
+        # и не должен тянуть за собой сборку страниц.
+        "AND a.importance > ? AND a.fetched_at >= datetime('now', ?) "
         # Сначала важное, потом свежее. Локальная модель на этом железе делает
-        # порядка сорока статей за прогон, а очередь суток — сотни: по одной
+        # порядка сорока статей за прогон, а очередь витрины — тысячи: по одной
         # свежести первый сюжет витрины мог висеть непереведённым, пока
         # разбирается всё, что пришло позже него.
-        "ORDER BY a.importance DESC, a.fetched_at DESC LIMIT ?", (LIMIT,)).fetchall()
+        "ORDER BY a.importance DESC, a.fetched_at DESC LIMIT ?",
+        (settings.RELEVANCE_CUTOFF, "-%d hours" % (24 * settings.ARCHIVE_DAYS),
+         LIMIT)).fetchall()
     # Переперевод чужого выхлопа: 660 статей от прежних движков (google-en-ru,
     # opus-ar-ru, m2m100, t5-enruzh...). Само оно не рассосётся — «Партия
     # тараканов Джанта» вместо «Джантар-Мантар» лежала бы в title_ru вечно.
@@ -119,15 +110,6 @@ def _candidates(conn):
             "AND translated_by NOT LIKE 'unsupported:%' AND translated_by NOT LIKE 'wait:%' "
             "ORDER BY importance DESC LIMIT ?",
             ("-%d days" % _REDO_DAYS, "%" + _GOOD + "%", redo)).fetchall()
-
-    have = {r[0] for r in rows}
-    extra = _feed_urls() - have
-    if extra and len(rows) < LIMIT:
-        qs = ",".join("?" * min(len(extra), 900))
-        rows += conn.execute(
-            "SELECT " + _COLS + " FROM articles a "
-            "WHERE " + _FRESH + " AND a.url IN (%s) "
-            "LIMIT ?" % qs, list(extra)[:900] + [LIMIT - len(rows)]).fetchall()
     return rows
 
 

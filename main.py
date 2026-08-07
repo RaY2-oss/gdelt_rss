@@ -34,9 +34,6 @@ def prune():
         cur = conn.execute(
             "DELETE FROM articles WHERE fetched_at < datetime('now', ?)",
             (f"-{settings.KEEP_HOURS} hours",))
-        conn.execute(
-            "DELETE FROM digest_sent WHERE digest_date < date('now', ?)",
-            (f"-{settings.KEEP_HOURS // 24} days",))
         conn.commit()
         import seen_store
         seen_store.prune(conn, 30)
