@@ -58,9 +58,15 @@ FEED_BASE = "https://rss.bhutyan.online"
 SITE_DAYS = min(settings.ARCHIVE_DAYS, settings.KEEP_HOURS // 24)
 SITE_HOURS = SITE_DAYS * 24
 
-HOME_LIMIT = 100       # сюжетов в ленте главной
-REGION_LIMIT = 120     # сюжетов на странице региона
-COUNTRY_LIMIT = 150    # сюжетов на странице страны
+# Сколько сюжетов попадает в саму разметку. Это НЕ глубина ленты: дальше
+# листалка берёт сюжеты из search.json, где лежит весь корпус (см. pager в
+# _story.html и app.js), так что читателю доступны все шесть тысяч. Сто —
+# столько, сколько имеет смысл нести с собой: страница страны на ста пятидесяти
+# карточках весила мегабайт с четвертью, и переход между документами всё это
+# время держал уходящий кадр замёрзшим.
+HOME_LIMIT = 100       # сюжетов в разметке главной
+REGION_LIMIT = 100     # сюжетов в разметке региона
+COUNTRY_LIMIT = 100    # сюжетов в разметке страны
 ENTITY_TOP = 14        # субъектов в блоке «кто в новостях»
 POPULAR_TOP = 12       # имён-подсказок под строкой поиска
 
@@ -848,6 +854,25 @@ def _selfcheck():
     assert s["day"] == now.strftime("%Y-%m-%d") == days(now)[0]["key"], s["day"]
     [s] = stories(None, [_row(None, None)], "south_korea", now)
     assert s["title"] == "Korean title" and s["lang_code"] == "en"
+
+    # app.js — одна функция на весь файл, поэтому var из блока листалки и var
+    # из блока подсказок живут в общей области. Совпади имена — второе
+    # объявление молча забирает первое, и половина страницы перестаёт
+    # отзываться без единой ошибки в консоли. Один раз так и вышло: draw из
+    # подсказок отменил draw ленты, и листалка щёлкала вхолостую.
+    js = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "site_static", "app.js")).read()
+    for chunk in js.split("\n(function () {"):
+        seen = {}
+        for ln, text in enumerate(chunk.split("\n"), 1):
+            m = re.match(r"( {2,4})var ([A-Za-z_$][\w$]*)\s*=", text)
+            if not m:
+                continue
+            name = m.group(2)
+            assert name not in seen, (
+                f"app.js: var {name} объявлен дважды в одной функции "
+                f"(строки {seen[name]} и {ln} блока) — второй затрёт первый")
+            seen[name] = ln
 
     entity_ru._selfcheck()
     print("site selfcheck ok")

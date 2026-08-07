@@ -23,6 +23,57 @@
   var apply = function () {};
   var dayPass = null; // null — все дни
 
+  // ── Корпус архива ─────────────────────────────────────────────────────
+  // Один файл на весь архив: страница носит с собой только первую сотню
+  // сюжетов, а и поиску, и листалке нужны все шесть тысяч. Грузится лениво и
+  // ровно один раз — обоим достаётся один и тот же разобранный объект.
+  var CORPUS = null, corpusWait = null;
+
+  var loadCorpus = function () {
+    if (CORPUS) return Promise.resolve(CORPUS);
+    if (!corpusWait) {
+      corpusWait = fetch('/search.json').then(function (r) { return r.json(); })
+        .then(function (j) {
+          // Один плоский стог на запись: страна и домен ищутся тем же
+          // подстрочным поиском, что и заголовок, — отдельные поля дали бы
+          // три прохода вместо одного.
+          j.hay = j.s.map(function (s) {
+            return (s[0] + ' ' + j.c[s[1]][1] + ' ' + s[5] + ' ' + s[6]).toLowerCase();
+          });
+          CORPUS = j;
+          return j;
+        });
+    }
+    return corpusWait;
+  };
+
+  // Область страницы в индексах корпуса: страна — она сама, регион — его
+  // страны, главная — весь мир (null).
+  var scopeOf = function (j) {
+    var c = document.body.dataset.country, r = document.body.dataset.region, i;
+    if (c) {
+      for (i = 0; i < j.c.length; i++) if (j.c[i][0] === c) return [i];
+      return [];
+    }
+    if (r) {
+      for (i = 0; i < j.g.length; i++) if (j.g[i][0] === r) return j.g[i][2];
+      return [];
+    }
+    return null;
+  };
+
+  var tierOf = function (score) {
+    return score >= 85 ? 4 : score >= 70 ? 3 : score >= 50 ? 2 : score >= 30 ? 1 : 0;
+  };
+
+  var dm = function (day) { return day.slice(5).split('-').reverse().join('.'); };
+
+  var calm = matchMedia('(prefers-reduced-motion: reduce)');
+
+  // Гистограмму дат рисует полоса дат, а пересчитывает листалка — когда
+  // подтянет архив и в счёт войдёт не только то, что лежит в разметке.
+  var drawHist = function () {};
+
   // ── Атлас ─────────────────────────────────────────────────────────────
   // Панель ложится поверх страницы и ничего не двигает, поэтому и состояние
   // между страницами не помнится: открытый по памяти атлас закрывал бы ленту
@@ -66,26 +117,12 @@
     var seedBox = find.querySelector('[data-find-seeds]');
     var statBox = find.querySelector('[data-find-stat]');
 
-    var IDX = null, pending = null;
+    var IDX = null;
     var st = { q: '', c: null, e: null, d: null };
     var LIMIT = 60;
 
     var load = function () {
-      if (IDX) return Promise.resolve(IDX);
-      if (!pending) {
-        pending = fetch('/search.json').then(function (r) { return r.json(); })
-          .then(function (j) {
-            // Один плоский стог на запись: страна и домен ищутся тем же
-            // подстрочным поиском, что и заголовок, — отдельные поля дали бы
-            // три прохода вместо одного.
-            j.hay = j.s.map(function (s) {
-              return (s[0] + ' ' + j.c[s[1]][1] + ' ' + s[5] + ' ' + s[6]).toLowerCase();
-            });
-            IDX = j;
-            return j;
-          });
-      }
-      return pending;
+      return loadCorpus().then(function (j) { IDX = j; return j; });
     };
 
     var entName = function (key) {
@@ -106,10 +143,6 @@
         out.push(s);
       }
       return out;
-    };
-
-    var tier = function (score) {
-      return score >= 85 ? 4 : score >= 70 ? 3 : score >= 50 ? 2 : score >= 30 ? 1 : 0;
     };
 
     // Полоска фасета: подпись, число и снятие по повторному нажатию.
@@ -185,7 +218,7 @@
         li.style.setProperty('--w', s[3]);
         // волна проявления: потолок задержки — чтобы хвост списка не ждал
         li.style.setProperty('--i', Math.min(i, 14));
-        li.dataset.tier = tier(s[3]);
+        li.dataset.tier = tierOf(s[3]);
         var a = el('a', 'find__link', s[0]);
         a.href = s[4];
         a.rel = 'noopener nofollow';
@@ -194,7 +227,7 @@
         meta.appendChild(el('span', 'find__score', s[3]));
         meta.appendChild(el('span', null, IDX.c[s[1]][1]));
         meta.appendChild(el('span', null, s[5]));
-        meta.appendChild(el('span', null, IDX.d[s[2]].slice(5).split('-').reverse().join('.')));
+        meta.appendChild(el('span', null, dm(IDX.d[s[2]])));
         li.appendChild(meta);
         listBox.appendChild(li);
       });
@@ -278,21 +311,28 @@
   if (strip && btns.length && stories.length) {
     var reset = strip.querySelector('[data-days-reset]');
 
-    // Гистограмма считается по самой ленте, а не приезжает из сборщика:
-    // цифра под столбиком и число строк после фильтра не могут разойтись.
+    // Гистограмма считается по ленте, а не приезжает из сборщика: цифра под
+    // столбиком и число строк после фильтра не могут разойтись. Пока архив не
+    // подтянут, лента — это первая сотня в разметке; как только листалка его
+    // получит, она позовёт drawHist ещё раз уже со всем корпусом.
+    var base = btns.map(function (b) { return b.title; });
+    drawHist = function (per) {
+      var peak = 1;
+      btns.forEach(function (b) { peak = Math.max(peak, per[b.dataset.day] || 0); });
+      btns.forEach(function (b, i) {
+        var n = per[b.dataset.day] || 0;
+        b.querySelector('.days__n').textContent = n || '';
+        b.querySelector('.days__bar > i').style.setProperty('--h', Math.round(n / peak * 100));
+        b.title = base[i] + ' — ' + n;
+      });
+    };
+
     var per = {};
     stories.forEach(function (n) {
       var d = n.dataset.day;
       per[d] = (per[d] || 0) + 1;
     });
-    var peak = 1;
-    btns.forEach(function (b) { peak = Math.max(peak, per[b.dataset.day] || 0); });
-    btns.forEach(function (b) {
-      var n = per[b.dataset.day] || 0;
-      b.querySelector('.days__n').textContent = n || '';
-      b.querySelector('.days__bar > i').style.setProperty('--h', Math.round(n / peak * 100));
-      b.title = b.title + ' — ' + n;
-    });
+    drawHist(per);
 
     var mark = function (lo, hi) {
       var keys = [];
@@ -354,29 +394,287 @@
     if (reset) reset.addEventListener('click', function () { mark(0, btns.length - 1); });
   }
 
-  // ── Фильтр по видимой ленте: слово + даты ─────────────────────────────
+  // ── Лента: фильтр и листалка ──────────────────────────────────────────
+  // Одна выборка, один рисовальщик. Слово, даты и номер страницы режут один и
+  // тот же список, поэтому и решение о показе строки принимается в одном
+  // месте — иначе фильтр и листалка спорили бы за атрибут hidden.
+  //
+  // Список длиннее того, что лежит в разметке. В HTML приезжает первая сотня
+  // сюжетов области (страна, регион или вся витрина), а хвост архива —
+  // остальные тысячи — берётся из search.json, того же файла, которым живёт
+  // поиск. Это не «ещё один способ показать новости», а единственный
+  // возможный: шесть тысяч карточек в разметке — это шестьдесят мегабайт.
+  //
+  // Хвост карточек беднее: у корпуса нет ни подводки, ни полного текста —
+  // заголовок, важность, страна, издание, дата и объекты. На двухсотой
+  // странице ленты, отсортированной по важности, это ровно та плотность,
+  // которая там и нужна.
   var word = q$('[data-filter]');
   var counter = q$('[data-filter-count]');
   var none = q$('.feed__none');
+  var feedBox = q$('[data-feed]');
+  var tailBox = q$('[data-feed-tail]');
+  var pgBox = q$('[data-pager]');
 
-  if (stories.length) {
-    apply = function () {
-      var v = word ? word.value.trim().toLowerCase() : '';
-      var shown = 0;
-      stories.forEach(function (n) {
-        var hit = (!v || (n.dataset.find || '').indexOf(v) !== -1) &&
-                  (!dayPass || dayPass.indexOf(n.dataset.day) !== -1);
-        n.hidden = !hit;
-        if (hit) shown++;
+  if (stories.length && feedBox) {
+    var numsBox = pgBox && pgBox.querySelector('[data-pg-nums]');
+    var statBox2 = pgBox && pgBox.querySelector('[data-pg-stat]');
+    var sizeSel = pgBox && pgBox.querySelector('[data-pg-size]');
+
+    var total = +feedBox.dataset.total || stories.length;
+    var withCountry = !('nocountry' in feedBox.dataset);
+
+    // Что уже лежит в разметке, листалка узнаёт по адресам. Сверять по номеру
+    // нельзя: порядок в корпусе и в ленте один, но при равной важности
+    // сборщик разводит сюжеты по числу изданий, а его в корпусе нет.
+    var mine = {};
+    stories.forEach(function (n) {
+      var a = n.querySelector('.story__link');
+      if (a) mine[a.href] = 1;
+    });
+
+    var tail = null, tailAsked = false;
+    var size = 20, page = 0, turn = 1, drawn = false;
+    try { size = +localStorage.getItem('pgsize') || 20; } catch (e) {}
+    if ([20, 50, 100].indexOf(size) < 0) size = 20;
+    if (sizeSel) sizeSel.value = size;
+
+    var ensure = function () {
+      if (tailAsked || total <= stories.length) return;
+      tailAsked = true;
+      if (pgBox) pgBox.classList.add('is-loading');
+      loadCorpus().then(function (j) {
+        var scope = scopeOf(j);
+        tail = [];
+        for (var i = 0; i < j.s.length; i++) {
+          var s = j.s[i];
+          if (scope && scope.indexOf(s[1]) < 0) continue;
+          if (mine[s[4]]) continue;
+          tail.push({ s: s, hay: j.hay[i], day: j.d[s[2]] });
+        }
+        if (pgBox) pgBox.classList.remove('is-loading');
+        // теперь гистограмма считается по всей глубине, а не по сотне
+        var per = {};
+        stories.forEach(function (n) { per[n.dataset.day] = (per[n.dataset.day] || 0) + 1; });
+        tail.forEach(function (t) { per[t.day] = (per[t.day] || 0) + 1; });
+        drawHist(per);
+        draw();
       });
-      var narrowed = v || dayPass;
-      if (counter) counter.textContent = narrowed ? shown + ' из ' + stories.length : '';
-      if (none) none.hidden = !narrowed || shown > 0;
+    };
+
+    var entRu = function (key) {
+      return (CORPUS && CORPUS.n && CORPUS.n[key]) ||
+        key.replace(/(^|[\s-])\S/g, function (m) { return m.toUpperCase(); });
+    };
+
+    var card = function (t, no) {
+      var s = t.s;
+      var art = el('article', 'story story--brief');
+      art.style.setProperty('--w', s[3]);
+      art.dataset.tier = tierOf(s[3]);
+      art.dataset.day = t.day;
+      var sig = el('div', 'story__sig');
+      sig.appendChild(el('span', 'story__no', no));
+      art.appendChild(sig);
+
+      var body = el('div', 'story__body');
+      var h = el('h3', 'story__title');
+      var a = el('a', 'story__link', s[0]);
+      a.href = s[4];
+      a.rel = 'noopener nofollow';
+      h.appendChild(a);
+      body.appendChild(h);
+
+      var meta = el('p', 'story__meta');
+      var imp = el('span', 'story__imp');
+      imp.title = 'Важность ' + s[3] + ' из 100';
+      imp.appendChild(el('i', 'story__impbar'));
+      imp.appendChild(document.createTextNode('важность '));
+      imp.appendChild(el('b', null, s[3]));
+      meta.appendChild(imp);
+      if (withCountry) {
+        var c = el('a', 'story__country', CORPUS.c[s[1]][1]);
+        c.href = '/c/' + CORPUS.c[s[1]][0] + '.html';
+        meta.appendChild(c);
+      }
+      meta.appendChild(el('span', 'story__source', s[5]));
+      var tm = el('time', 'story__time', dm(t.day));
+      tm.dateTime = t.day;
+      meta.appendChild(tm);
+      body.appendChild(meta);
+
+      var names = (s[6] || '').split(';').filter(Boolean).slice(0, 8);
+      if (names.length) {
+        var ul = el('ul', 'ents');
+        names.forEach(function (e) {
+          var li = el('li');
+          var b = el('button', null, entRu(e));
+          b.type = 'button';
+          b.dataset.seed = e;
+          // как и у строк из разметки: имя со страницы страны ищется в её
+          // пределах, а не уводит в мир
+          if (document.body.dataset.country || document.body.dataset.region) b.dataset.seedScope = '';
+          li.appendChild(b);
+          ul.appendChild(li);
+        });
+        body.appendChild(ul);
+      }
+      art.appendChild(body);
+      return art;
+    };
+
+    // Номера страниц: края всегда, окно вокруг текущей, между ними — многоточие.
+    // Триста девятнадцать кнопок подряд — это не листалка, а вторая лента.
+    var nums = function (pages) {
+      numsBox.textContent = '';
+      var want = {}, i;
+      want[0] = want[pages - 1] = 1;
+      for (i = page - 1; i <= page + 1; i++) if (i >= 0 && i < pages) want[i] = 1;
+      var keys = Object.keys(want).map(Number).sort(function (a, b) { return a - b; });
+      keys.forEach(function (p, k) {
+        if (k && p - keys[k - 1] > 1) numsBox.appendChild(el('span', 'pager__gap', '…'));
+        var b = el('button', 'pager__num', p + 1);
+        b.type = 'button';
+        if (p === page) {
+          b.className += ' is-here';
+          b.setAttribute('aria-current', 'page');
+        }
+        b.addEventListener('click', function () { go(p); });
+        numsBox.appendChild(b);
+      });
+    };
+
+    var draw = function () {
+      var v = word ? word.value.trim().toLowerCase() : '';
+      var narrowed = !!(v || dayPass);
+
+      var live = [];
+      stories.forEach(function (n) {
+        if ((!v || (n.dataset.find || '').indexOf(v) !== -1) &&
+            (!dayPass || dayPass.indexOf(n.dataset.day) !== -1)) live.push(n);
+        else n.hidden = true;
+      });
+
+      var rest = [];
+      if (tail) {
+        for (var i = 0; i < tail.length; i++) {
+          var t = tail[i];
+          if (v && t.hay.indexOf(v) === -1) continue;
+          if (dayPass && dayPass.indexOf(t.day) < 0) continue;
+          rest.push(t);
+        }
+      }
+
+      // Пока архив не приехал, глубину ленты берём из сборщика: сколько
+      // сюжетов в области, страница знает и без корпуса. Под фильтром такой
+      // оценки нет — там считаем по тому, что уже есть.
+      var found = live.length + (tail ? rest.length
+        : narrowed ? 0 : Math.max(0, total - stories.length));
+      var pages = Math.max(1, Math.ceil(found / size));
+      if (page >= pages) page = pages - 1;
+      if (page < 0) page = 0;
+      var from = page * size, to = from + size;
+
+      live.forEach(function (n, i) {
+        var on = i >= from && i < to;
+        n.hidden = !on;
+        if (!on) return;
+        var no = n.querySelector('.story__no');
+        if (no) no.textContent = i + 1;
+        n.style.setProperty('--i', Math.min(i - from, 20));
+      });
+
+      if (tailBox) {
+        tailBox.textContent = '';
+        var lo = Math.max(0, from - live.length), hi = Math.min(to - live.length, rest.length);
+        for (var k = lo; k < hi; k++) {
+          var node = card(rest[k], live.length + k + 1);
+          node.style.setProperty('--i', Math.min(live.length + k - from, 20));
+          tailBox.appendChild(node);
+        }
+        tailBox.hidden = !tailBox.firstChild;
+      }
+
+      var shown = Math.min(to, found) - from;
+      if (counter) counter.textContent = narrowed ? found + ' из ' + total : '';
+      if (none) none.hidden = found > 0;
+      if (pgBox) {
+        pgBox.hidden = pages < 2;
+        nums(pages);
+        Array.prototype.forEach.call(pgBox.querySelectorAll('[data-pg]'), function (b) {
+          var p = page + (+b.dataset.pg);
+          b.disabled = p < 0 || p >= pages;
+        });
+        if (statBox2) {
+          statBox2.textContent = shown > 0
+            ? (from + 1) + '–' + (from + shown) + ' из ' + found
+            : 'страница пуста';
+        }
+      }
+      drawn = true;
+    };
+
+    // Переворот страницы — движением, а не подменой кадра: строки приезжают
+    // с той стороны, в которую листаешь. Восстанавливать класс через reflow
+    // приходится потому, что анимация без смены имени сама по себе не
+    // перезапускается.
+    var animate = function () {
+      if (calm.matches) return;
+      [feedBox, tailBox].forEach(function (b) {
+        if (!b) return;
+        b.dataset.turn = turn > 0 ? 'fwd' : 'back';
+        b.classList.remove('is-turn');
+        void b.offsetWidth;
+        b.classList.add('is-turn');
+      });
+    };
+
+    var go = function (p) {
+      ensure();
+      turn = p > page ? 1 : -1;
+      page = p;
+      draw();
+      animate();
+      var y = feedBox.getBoundingClientRect().top + scrollY - 72;
+      scrollTo({ top: Math.max(0, y), behavior: calm.matches ? 'auto' : 'smooth' });
+    };
+
+    // Фильтр всегда возвращает на первую страницу: остаться на седьмой
+    // странице выборки из трёх строк нельзя, а молча переехать — значит
+    // соврать про то, что нажатие сделало.
+    apply = function () {
+      ensure();
+      turn = 1;
+      page = 0;
+      draw();
+      if (drawn) animate();
     };
 
     if (word) word.addEventListener('input', apply);
-    // страница могла восстановиться из bfcache с непустым полем
-    if (word && word.value) apply();
+    if (pgBox) {
+      Array.prototype.forEach.call(pgBox.querySelectorAll('[data-pg]'), function (b) {
+        b.addEventListener('click', function () { go(page + (+b.dataset.pg)); });
+      });
+      if (sizeSel) sizeSel.addEventListener('change', function () {
+        var was = page * size;
+        size = +sizeSel.value;
+        try { localStorage.setItem('pgsize', size); } catch (e) {}
+        go(Math.floor(was / size));
+      });
+    }
+
+    draw();
+
+    // Стрелки листают ленту, когда набирать некуда: ← и → у страницы, к
+    // которой и так пришли читать подряд.
+    document.addEventListener('keydown', function (e) {
+      if (e.metaKey || e.ctrlKey || e.altKey || !pgBox || pgBox.hidden) return;
+      var tag = (e.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      if (root.classList.contains('is-find') || root.classList.contains('is-atlas')) return;
+      if (e.key === 'ArrowRight') { e.preventDefault(); go(page + 1); }
+      else if (e.key === 'ArrowLeft' && page > 0) { e.preventDefault(); go(page - 1); }
+    });
   }
 
   // ── Подсказки фильтра: словарь этой страницы, а не всего корпуса ───────
@@ -406,7 +704,10 @@
         .map(function (k) { return { label: k, n: count[k] }; });
     };
 
-    var draw = function () {
+    // Не draw: весь файл — одна функция, var в ней один на все блоки, и это
+    // имя уже занято рисовальщиком ленты. Совпади они — листалка молча
+    // перестала бы листать.
+    var drawSugg = function () {
       if (!dict) dict = build();
       var v = word.value.trim().toLowerCase();
       var rows = dict.filter(function (d) {
@@ -423,7 +724,7 @@
           e.preventDefault();
           word.value = d.label;
           apply();
-          draw();
+          drawSugg();
           word.focus();
         });
         sugg.appendChild(b);
@@ -431,8 +732,8 @@
       sugg.hidden = !rows.length;
     };
 
-    word.addEventListener('focus', draw);
-    word.addEventListener('input', draw);
+    word.addEventListener('focus', drawSugg);
+    word.addEventListener('input', drawSugg);
     word.addEventListener('blur', function () { sugg.hidden = true; });
     word.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && !sugg.hidden) { e.stopPropagation(); sugg.hidden = true; }

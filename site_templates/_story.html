@@ -144,14 +144,65 @@
 {% endmacro %}
 
 
-{% macro feed(items, show_country=True, empty='За весь период ничего не набралось.', start=1) %}
+{# Листалка. Разметка есть всегда, показывает её app.js: без скрипта на
+   странице просто лежит первая сотня сюжетов подряд — ровно как лежала, — и
+   ничего не ломается.
+
+   Глубже сотни сюжеты приходят из того же search.json, которым живёт поиск по
+   архиву: там весь корпус, тем же порядком, и грузится он лениво. Складывать
+   в страницу все шесть тысяч карточек нельзя — это шестьдесят мегабайт, — а
+   отдавать читателю только сотню, когда в архиве шесть тысяч, нечестно. #}
+{% macro pager() %}
+<nav class="pager" data-pager hidden aria-label="Страницы ленты">
+  <button class="pager__step" type="button" data-pg="-1" aria-label="Назад">←</button>
+  <span class="pager__nums" data-pg-nums></span>
+  <button class="pager__step" type="button" data-pg="1" aria-label="Дальше">→</button>
+  <label class="pager__size">
+    <span>по</span>
+    <select data-pg-size>
+      <option value="20">20</option>
+      <option value="50">50</option>
+      <option value="100">100</option>
+    </select>
+  </label>
+  <span class="pager__stat" data-pg-stat aria-live="polite"></span>
+</nav>
+{% endmacro %}
+
+
+{# total — весь охват ленты, а не то, что попало в разметку: по нему листалка
+   знает число страниц ещё до того, как подтянет архив. Область (страна,
+   регион или вся витрина) читается из <body data-country|data-region>. #}
+{% macro feed(items, show_country=True, empty='За весь период ничего не набралось.', start=1, total=0) %}
 {% if items %}
-<div class="feed" id="feed">
+<div class="feed" id="feed" data-feed data-total="{{ total or items|length }}"
+     {% if not show_country %}data-nocountry{% endif %}>
   {% for s in items %}{{ story(s, show_country, loop.index0, loop.index0 + start) }}{% endfor %}
 </div>
+{# Первая страница отмеряется прямо здесь, при разборе документа, а не в
+   app.js. Скрипт отложенный (defer), то есть работает уже после того, как
+   браузер нарисовал страницу: сотня строк успевала показаться и через
+   мгновение схлопнуться до двадцати — читатель видел рывок на ровном месте.
+   Здесь же разметка ленты только что разобрана, а ниже неё ещё ничего не
+   нарисовано. Без скрипта не срабатывает вовсе — и тогда лежит вся сотня
+   подряд, как лежала. #}
+<script>
+(function () {
+  var f = document.getElementById('feed');
+  if (!f) return;
+  var z = 20;
+  try { z = +localStorage.getItem('pgsize') || 20; } catch (e) {}
+  if ([20, 50, 100].indexOf(z) < 0) z = 20;
+  // лид — тоже первый сюжет ленты, просто набранный крупно и стоящий выше
+  var from = z - (document.querySelector('.story--lead') ? 1 : 0);
+  for (var i = from; i < f.children.length; i++) f.children[i].hidden = true;
+})();
+</script>
+<div class="feed feed--tail" data-feed-tail hidden></div>
 {# «весь период» — ровно та надпись, что стоит на кнопке сброса дат: совет
    должен называть кнопку так же, как она подписана. #}
 <p class="feed__none" hidden>Ничего не найдено. Попробуйте другое слово или верните весь период.</p>
+{{ pager() }}
 {% else %}
 <p class="empty">{{ empty }}</p>
 {% endif %}

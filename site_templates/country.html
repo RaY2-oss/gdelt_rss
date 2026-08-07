@@ -47,6 +47,6 @@
 
   {% if items %}{{ tools(days, 'Тема, имя или издание') }}{% endif %}
 
-  {{ feed(items, False, 'За ' ~ period_acc ~ ' ничего не набралось. Загляните позже.') }}
+  {{ feed(items, False, 'За ' ~ period_acc ~ ' ничего не набралось. Загляните позже.', 1, total) }}
 </section>
 {% endblock %}

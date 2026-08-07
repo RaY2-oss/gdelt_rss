@@ -30,6 +30,6 @@
 
   {{ tools(days, 'Тема, страна, имя или издание') }}
 
-  {{ feed(items, True, 'За ' ~ period_acc ~ ' в регионе ничего не набралось.') }}
+  {{ feed(items, True, 'За ' ~ period_acc ~ ' в регионе ничего не набралось.', 1, region.n) }}
 </section>
 {% endblock %}
