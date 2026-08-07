@@ -75,7 +75,23 @@ _CYR = re.compile(r"[Ѐ-ӿ]")
 
 _SPLIT = re.compile(r'(?<=[.!?。！？；;])\s*')
 _engine = None
+_tokenizer = None
 _lock = threading.RLock()
+
+# Куски, которые прячем целиком, если внутри нашлась буква вне словаря модели.
+# Границы — пробелы и знаки конца фразы: запятые и точки модель должна видеть,
+# иначе поедет структура предложения, а вот дефис и апостроф внутри имени
+# разрывать нельзя («Erdoğan's», «2020–2025»).
+_CHUNK = re.compile(r"[^\s.,;:!?()\[\]«»\"]+")
+_POSS = re.compile(r"['’]s$")
+_charok = {}
+
+# Какую долю маркеров позволено потерять, прежде чем считать защиту
+# провалившейся. Не ноль: модель иногда сама сливает соседние имена («Niğde
+# Ömer Halisdemir University» → «Университет Халисдемир»), и требовать все
+# маркеры значило бы из-за одного пропавшего имени откатиться на перевод, где
+# искалечены все девять.
+MARK_LOSS = float(os.environ.get("TRANSLATE_MARK_LOSS", "0.34"))
 
 
 def detect_src(lang, text=""):
@@ -106,12 +122,74 @@ def split_sentences(text):
     return [s.strip() for s in _SPLIT.split(t) if len(s.strip()) > 1][:MAX_SENT]
 
 
+def tokenizer():
+    """Токенизатор отдельно от переводчика: он стоит мегабайт против трёхсот,
+    а нужен ещё и до перевода — решить, какие слова модель не выговорит."""
+    global _tokenizer
+    with _lock:
+        if _tokenizer is None:
+            from transformers import MarianTokenizer
+            _tokenizer = MarianTokenizer.from_pretrained(
+                HF_NAME, local_files_only=True, cache_dir=_HUB)
+        return _tokenizer
+
+
+def _known(ch):
+    """Переживёт ли символ токенизатор.
+
+    Спрашиваем саму модель, а не держим список: словарь SentencePiece — часть
+    весов, и при смене модели список бы протух молча.
+    """
+    ok = _charok.get(ch)
+    if ok is None:
+        tok = tokenizer()
+        ok = ch in tok.decode(tok.encode(ch), skip_special_tokens=True)
+        _charok[ch] = ok
+    return ok
+
+
+def _protect_unknown(text, subs):
+    """Спрятать под маркеры куски с буквами, которых нет в словаре модели.
+
+    Символы вне словаря SentencePiece выпадают МОЛЧА — не в <unk>, а в ничто.
+    В словаре tc-big-en-zle нет всей латиницы с диакритикой, и в дайджест ехало
+    «TENMAK Aratrma Burs» вместо «Araştırma Bursu», «Nide mer Halisdemir»
+    вместо «Niğde Ömer Halisdemir», «YK» вместо «YÖK». Одними турецкими буквами
+    дело не ограничивается: так же теряются é è ñ å ø æ ß ł ń, то есть половина
+    европейских фамилий, и знаки ° – ₺.
+
+    Вход у модели всегда английский (первое плечо — Google), поэтому кусок с
+    диакритикой — это имя собственное, которое переводчик и так оставил как
+    есть. Прятать его под маркер ничего не стоит, а обратно он приходит
+    невредимым. Механизм тот же, что у словаря, и нумерация маркеров общая:
+    glossary.restore разбирает и те и другие одним проходом.
+    """
+    if not text:
+        return text
+    hits = [m.span() for m in _CHUNK.finditer(text)
+            if any(not c.isascii() and not _known(c) for c in m.group())]
+    if not hits:
+        return text
+    import glossary
+    parts, prev = [], 0
+    for i, (a, b) in enumerate(hits, len(subs) + 1):
+        mk = glossary.mark(i)
+        # Английский притяжательный падеж срезаем вместе с ним самим. Слово
+        # под маркером модель просклонять не может по определению, и «сказал
+        # Erdoğan's» доезжало до читателя как есть. В русском такого клитика
+        # нет, а «офис Erdoğan» модель строит сама.
+        chunk = _POSS.sub("", text[a:b])
+        subs[mk] = chunk
+        parts.append(text[prev:a]); parts.append(mk)
+        prev = b
+    parts.append(text[prev:])
+    return "".join(parts)
+
+
 class _Marian:
     def __init__(self):
         import ctranslate2
-        from transformers import MarianTokenizer
-        self.tok = MarianTokenizer.from_pretrained(HF_NAME, local_files_only=True,
-                                                   cache_dir=_HUB)
+        self.tok = tokenizer()
         self.tr = ctranslate2.Translator(os.path.join(CT2_DIR, CT2_NAME), device="cpu",
                                          compute_type="int8", inter_threads=1,
                                          intra_threads=THREADS)
@@ -162,11 +240,18 @@ def translate_doc(title, text):
     Словарь (glossary.py) подключён с двух сторон: keep-термины прячутся под
     маркеры ДО перевода, чтобы модель не сделала из DeepSeek «Дип Сикс», а
     ru-термины чинятся ПОСЛЕ, если латиница просочилась в вывод. Русский
-    вывод поверх себя не переписывается — иначе поедут падежи."""
+    вывод поверх себя не переписывается — иначе поедут падежи.
+
+    Под те же маркеры уходит всё, чего нет в словаре модели по буквам, —
+    см. _protect_unknown. Порядок важен: сначала словарь, потом буквы, иначе
+    «Erdoğan» ушёл бы под маркер как незнакомое слово и словарная форма к нему
+    уже не применилась бы."""
     import glossary
 
     t_prot, t_subs = glossary.protect(title or "")
     x_prot, x_subs = glossary.protect(text or "")
+    t_prot = _protect_unknown(t_prot, t_subs)
+    x_prot = _protect_unknown(x_prot, x_subs)
     t_sents = split_sentences(t_prot) or ([t_prot.strip()] if t_prot.strip() else [])
     x_sents = split_sentences(x_prot)
     out, route = translate_sentences(t_sents + x_sents)
@@ -176,10 +261,10 @@ def translate_doc(title, text):
     t_ru = " ".join(out[:n]).strip()
     x_ru = " ".join(out[n:]).strip()
 
-    t_ru, ok_t = glossary.restore(t_ru, t_subs)
-    x_ru, ok_x = glossary.restore(x_ru, x_subs)
+    t_ru, ok_t = glossary.restore(t_ru, t_subs, MARK_LOSS)
+    x_ru, ok_x = glossary.restore(x_ru, x_subs, MARK_LOSS)
     if not (ok_t and ok_x):
-        # Маркеры не пережили перевод. Переводим ещё раз без защиты: лучше
+        # Защита рассыпалась целиком. Переводим ещё раз без неё: лучше
         # исковерканное имя, чем дыра в тексте. Метку маршрута помечаем, чтобы
         # такие случаи можно было потом посчитать и подкрутить маркер.
         log.info("glossary: маркеры не пережили перевод, повтор без защиты")
@@ -199,7 +284,9 @@ def translate_doc(title, text):
 
 def _selfcheck():
     """Проверяем то, что ломается молча: маршрутизацию по письменности и то,
-    что модель на месте. Саму модель не поднимаем — это 300 МБ и полминуты."""
+    что модель на месте. Переводчик не поднимаем — это 300 МБ и полминуты,
+    а вот токенизатор поднимаем: он мегабайт, и именно он решает, какие буквы
+    доедут до читателя."""
     assert detect_src("ko", "한국 제목") == "ko"
     assert detect_src("ko", "中国 标题") == "zh", "метка врёт, письменность главнее"
     assert detect_src("en", "Русский заголовок целиком") == "ru"
@@ -208,6 +295,23 @@ def _selfcheck():
     assert split_sentences("Раз. Два! Три?") == ["Раз.", "Два!", "Три?"]
     assert split_sentences("") == [] and split_sentences(None) == []
     assert available(), "CT2-сборка %s не найдена в %s" % (CT2_NAME, CT2_DIR)
+
+    # Ради чего всё: буквы вне словаря модели выпадают молча, и без защиты
+    # «Araştırma» доезжает как «Aratrma». Проверяем на живом токенизаторе —
+    # список выпадающих букв не выписан нигде, он часть весов.
+    assert not _known("ş") and not _known("ğ") and not _known("ø")
+    assert _known("i") and _known("я") and _known("—")
+    subs = {}
+    got = _protect_unknown("Ørsted and Erdoğan's plan for Niğde in 2020–2025", subs)
+    assert "Ørsted" not in got and "Niğde" not in got, got
+    assert "and" in got and "plan for" in got, "обычные слова прятать незачем: " + got
+    assert sorted(subs.values()) == ["2020–2025", "Erdoğan", "Niğde", "Ørsted"], subs
+    assert _protect_unknown("A plain English sentence.", {}) == "A plain English sentence."
+    # Маркеры словаря сами по себе под защиту попасть не должны: иначе первый
+    # же keep-термин утащил бы за собой второй маркер поверх первого.
+    import glossary
+    marked = "the " + glossary.mark(1) + " report"
+    assert _protect_unknown(marked, {}) == marked
     print("translate_ru selfcheck ok")
 
 

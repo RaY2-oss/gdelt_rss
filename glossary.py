@@ -34,10 +34,19 @@ log = logging.getLogger("gdelt_rss")
 # (glossary_region.tsv — Турция, Центральная Азия, Южный Кавказ). Разделение
 # по файлам чисто для удобства правки, на выходе один общий список.
 GLOSSARY_DIR = os.environ.get("GLOSSARY_DIR", "/opt/translate")
-# Маркер для режима keep. Латиница в верхнем регистре с цифрой: остаётся
-# внутри словаря SentencePiece и переживает перевод чаще, чем скобки-юникод.
-_MARK = "ZQX%dQ"
-_MARK_RE = re.compile(r"ZQX(\d+)Q")
+# Маркер для режима keep. Форма не на глаз: пятнадцать кандидатов прогнаны
+# через саму модель по шесть штук в предложении, и разброс оказался полным —
+# от нуля до всех. Прежний ZQX%dQ не переживал НИ ОДНОГО раза: модель съедала
+# «ZQ» и отдавала «X1Q», restore не досчитывался и откатывался на перевод без
+# защиты. То есть keep-режим словаря не работал вовсе, молча.
+#
+# XX%dXX переживает 20 из 20 в разных позициях фразы. Одиночные буквы (Q%dQ,
+# V%dV) отваливаются на маркере-предложении: модель принимает их за слово и
+# переводит в кириллицу — «Q1Q» → «К1К». Скобки и решётки (#%d#, @%d@)
+# выбрасываются целиком вместе с содержимым. В живом тексте «XX» с цифрой
+# внутри не встречается: римское XXI цифру наружу не выносит.
+_MARK = "XX%dXX"
+_MARK_RE = re.compile(r"XX(\d+)XX")
 
 _lock = threading.Lock()
 _cache = None      # {нормализованная фраза: (замена, режим)}
@@ -151,6 +160,13 @@ def extract_entities(text, limit=40):
     return out
 
 
+def mark(i):
+    """Маркер номер i. Публичный, потому что под маркеры прячет не только
+    словарь: translate_ru тем же способом спасает слова с буквами, которых нет
+    в словаре модели. Нумерация у них общая — restore разбирает всё разом."""
+    return _MARK % i
+
+
 def protect(text):
     """Прячем keep-термины под маркеры. Возвращает (текст, {маркер: оригинал})."""
     if not text:
@@ -160,26 +176,32 @@ def protect(text):
         return text, {}
     subs, parts, prev = {}, [], 0
     for i, (a, b, _key, dst, _mode) in enumerate(hits, 1):
-        mark = _MARK % i
-        subs[mark] = dst
-        parts.append(text[prev:a]); parts.append(mark)
+        mk = mark(i)
+        subs[mk] = dst
+        parts.append(text[prev:a]); parts.append(mk)
         prev = b
     parts.append(text[prev:])
     return "".join(parts), subs
 
 
-def restore(text, subs):
+def restore(text, subs, tolerate=0.0):
     """Возвращаем оригиналы на место маркеров.
 
     Если модель потеряла или размножила маркеры, счётчик не сойдётся — тогда
-    честнее отдать сигнал наверх, чем оставить в тексте мусор вида ZQX3Q.
-    Вызывающий код в этом случае берёт неохраняемый перевод."""
+    честнее отдать сигнал наверх, чем оставить в тексте мусор вида XX3XX.
+    Вызывающий код в этом случае берёт неохраняемый перевод.
+
+    tolerate — доля маркеров, которую позволено потерять, не считая перевод
+    испорченным. Ноль означает «всё или ничего» и годится, пока под маркером
+    ходят только словарные термины: их единицы, и пропажа любого заметна.
+    Когда под маркеры уходит ещё и всё, чего модель не выговаривает по буквам
+    (translate_ru), маркеров в абзаце бывает десяток, и размен переворачивается:
+    отказ от защиты калечит ВСЕ имена сразу, а потеря одного маркера — это одно
+    имя, которое модель и так решила не повторять."""
     if not subs:
         return text, True
-    ok = True
     found = set(_MARK_RE.findall(text or ""))
-    if len(found) != len(subs):
-        ok = False
+    ok = len(subs) - len(found) <= len(subs) * tolerate and len(found) <= len(subs)
     for mark, orig in subs.items():
         text = text.replace(mark, orig)
     # Подчищаем то, что модель испортила до неузнаваемости.
@@ -251,3 +273,33 @@ def as_prompt_block(text=None, entities=None, limit=60):
         return ""
     return ("Established renderings — use exactly these forms, inflecting them "
             "for Russian grammar as needed:\n" + "\n".join(lines))
+
+
+def _selfcheck():
+    """Проверяем разбор маркеров, а не сам словарь: словарь — данные, он
+    меняется каждую неделю, а порог потерь — правило, и молчит, когда врёт."""
+    subs = {mark(i): "Имя%d" % i for i in range(1, 5)}
+    whole = " ".join(subs)
+
+    assert restore(whole, subs) == ("Имя1 Имя2 Имя3 Имя4", True)
+    assert restore("текст", {}) == ("текст", True)
+
+    # Один маркер из четырёх потерян. При нулевом допуске это провал, при
+    # трети — нет: откат стоит дороже, чем одно пропавшее имя.
+    lost = " ".join(list(subs)[:3])
+    assert restore(lost, subs)[1] is False
+    text, ok = restore(lost, subs, 0.34)
+    assert ok and text == "Имя1 Имя2 Имя3", text
+
+    # Половину не прощаем ни при каком пороге ниже половины.
+    assert restore(" ".join(list(subs)[:2]), subs, 0.34)[1] is False
+
+    # Мусор вида XX9XX в тексте не остаётся никогда, даже когда допуск сработал.
+    text, ok = restore(mark(1) + " " + mark(9), subs, 0.9)
+    assert "XX" not in text, text
+
+    print("glossary selfcheck ok")
+
+
+if __name__ == "__main__":
+    _selfcheck()
