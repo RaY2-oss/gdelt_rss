@@ -32,6 +32,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 import db
 import settings
 import translate
+import entities
 import entity_ru
 import glossary
 import importance as imp
@@ -603,7 +604,10 @@ def stories(conn, rows, country, now):
             "sources": sources,
             "outlets": len(sources),
             "outlets_word": _plural(len(sources), "издание", "издания", "изданий"),
-            "entities": [e for e in (ents or "").split(";") if e][:4],
+            # Через entities.split, а не сырым split(";"): в колонке лежат
+            # имена, записанные прежними прогонами, и обстановку страницы
+            # («whatsapp linkedin») надо отсеять на чтении.
+            "entities": entities.split(ents)[:4],
             "country": country,
             "country_ru": RU_COUNTRY.get(country, settings.country_display(country)),
             # Эмбеддинг тела головной статьи — только чтобы посчитать похожие

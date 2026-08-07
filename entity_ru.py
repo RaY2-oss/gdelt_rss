@@ -8,6 +8,10 @@
        по ЦЕЛОЙ фразе: частичное («Ministry of Education» → «Министерство of
        Education») хуже честной латиницы. Режим keep оставляет оригинал
        намеренно — Samsung, Facebook, NASDAQ на кириллице читаются хуже.
+       Единственное исключение из «целой фразы» — бренд в НАЧАЛЕ имени: он
+       держит латиницей всё имя. Иначе выходило «Samsung» рядом с «Самсунг
+       Электроникс», то есть одна фирма двумя разными способами на одной
+       странице.
     2. Кэш в таблице entity_ru: имена повторяются из сборки в сборку, платить
        за них сетевым запросом каждый час незачем.
     3. Google-переводчик, тот же deep_translator, что и у статей. Локальные
@@ -68,12 +72,27 @@ def _from_glossary(name):
     key = glossary._norm(name)
     if not key:
         return None
-    for _s, _e, hit, repl, mode in glossary.find_all(name):
+    for start, end, hit, repl, mode in glossary.find_all(name):
         if hit == key:
             # keep — это «не кириллицей», а не «как пришло»: в словаре у такой
             # строки лежит каноническое латинское написание (NASDAQ, NVIDIA),
             # и оно лучше и нижнего регистра из GKG, и своего .title().
             return repl or name
+        if start == 0 and mode == "keep":
+            # Имя начинается с бренда, который мы условились не переводить, —
+            # латиницей остаётся всё имя. Иначе на одной странице соседствуют
+            # «Samsung» и «Самсунг Электроникс»: голова из словаря, хвост от
+            # переводчика, и читается это как два разных предприятия.
+            # Остальные словарные бренды внутри имени пишем канонически, а не
+            # своим .title(): «Google DeepMind», не «Google Deepmind».
+            out, pos = [], 0
+            for s, e, _h, r, m in glossary.find_all(name):
+                if m != "keep":
+                    break
+                out += [_latin(name[pos:s]), r]
+                pos = e
+            return " ".join(" ".join(out + [_latin(name[pos:])]).split())
+        break   # словарь зацепил середину — целиком имя всё равно не наше
     return None
 
 
@@ -163,6 +182,12 @@ def _selfcheck():
     assert _from_glossary("nasdaq") == "NASDAQ"             # keep — но написание из словаря
     assert _from_glossary("ministry of education") is None  # частичное — не берём
     assert _from_glossary("") is None
+    # Бренд в голове имени держит латиницей весь хвост, а в середине — нет:
+    # «United States Army» словарь переводит целиком («Армия США»).
+    assert _from_glossary("samsung electronics") == "Samsung Electronics"
+    assert _from_glossary("huawei technologies co") == "Huawei Technologies Co"
+    assert _from_glossary("united states army") is None
+    assert _from_glossary("google deepmind") == "Google DeepMind"
     assert _clean("Сонам ​​Вангчук") == "Сонам Вангчук"
     assert _latin("whatsapp linkedin") == "Whatsapp Linkedin"
     assert _latin("Министерство образования") == "Министерство образования"
