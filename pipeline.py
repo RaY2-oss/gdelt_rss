@@ -292,6 +292,99 @@ def _detect_lang(text):
         return None
 
 
+# ── Момент публикации ───────────────────────────────────────────────────────
+# htmldate отвечает на вопрос «какого числа», и только на него: в БД у всех
+# 62 815 статей publish_date без времени, до единой. Витрине этого мало по двум
+# причинам. Во-первых, лента внутри дня выстраивается по времени, а когда его
+# нет, dateutil ставит полночь UTC — и весь день слипается в одну отметку.
+# Во-вторых, у тысячи статей дата оказывалась ПОЗЖЕ времени, когда мы их
+# скачали: htmldate брал «обновлено» или дату в чужом часовом поясе.
+#
+# Между тем время у страницы обычно есть — в её же разметке, ISO 8601 с зоной:
+# JSON-LD datePublished, og:article:published_time, itemprop. Порядок ниже —
+# порядок доверия: сначала то, что издание объявило машинам явно, потом
+# htmldate как было, потом дата GKG, потом момент, когда мы её встретили.
+_LD_DATE = re.compile(r'"date(?:Published|Created)"\s*:\s*"([^"]{10,40})"')
+_META_DATE = re.compile(
+    rb'<meta[^>]+(?:property|itemprop|name)\s*=\s*["\']'
+    rb'(?:article:published_time|og:article:published_time|datePublished'
+    rb'|parsely-pub-date|pubdate|publish-date|publication_date|sailthru\.date)'
+    rb'["\'][^>]*?content\s*=\s*["\']([^"\']{10,40})["\']', re.I)
+# content= может стоять и ПЕРЕД именем — второй порядок тем же списком имён
+_META_DATE_REV = re.compile(
+    rb'<meta[^>]+content\s*=\s*["\']([^"\']{10,40})["\'][^>]*?'
+    rb'(?:property|itemprop|name)\s*=\s*["\']'
+    rb'(?:article:published_time|og:article:published_time|datePublished'
+    rb'|parsely-pub-date|pubdate|publish-date|publication_date|sailthru\.date)'
+    rb'["\']', re.I)
+
+
+def _stamp(raw, url, day_hint, seen):
+    """Момент публикации из разметки страницы; если её нет — htmldate.
+
+    Возвращает строку ISO 8601 или None: не нашли ничего — пусть решает
+    вызывающий, у него есть ещё дата GKG.
+
+    `seen` — когда мы страницу скачали. Он же и потолок: опубликованного
+    позже, чем прочитано, не бывает, а дата в чужом часовом поясе или
+    подставленное «обновлено» такое регулярно рисуют. Пол — десять лет назад:
+    ниже начинаются страницы, где в разметку попал год копирайта.
+    """
+    lo = seen - timedelta(days=3653)
+
+    def ok(v):
+        d = _parse_iso(v)
+        return d.isoformat() if d and lo <= d <= seen else None
+
+    head = raw[:200_000]                       # шапка документа, не весь текст
+    for m in _META_DATE.finditer(head):
+        d = ok(m.group(1).decode("utf-8", "replace"))
+        if d:
+            return d
+    for m in _META_DATE_REV.finditer(head):
+        d = ok(m.group(1).decode("utf-8", "replace"))
+        if d:
+            return d
+    for m in _LD_DATE.finditer(head.decode("utf-8", "replace")):
+        d = ok(m.group(1))
+        if d:
+            return d
+
+    return ok(day_hint)   # дальше времени нет, остаётся календарная дата
+
+
+def _parse_iso(v):
+    """ISO 8601 (и то, что на него похоже) → datetime в UTC. Без dateutil:
+    сюда приходит машинная разметка, а не человеческий текст."""
+    v = (v or "").strip().replace("/", "-")
+    if not v:
+        return None
+    try:
+        d = datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError:
+        m = re.match(r"(\d{4})-(\d{2})-(\d{2})", v)
+        if not m:
+            return None
+        d = datetime(*map(int, m.groups()))
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def _extract(raw, url):
+    """Байты страницы -> (текст, заголовок). Именно байты, не str: без charset
+    в Content-Type requests угадывает ISO-8859-1 и калечит не-латинские
+    страницы, а trafilatura определяет кодировку по meta/BOM надёжнее."""
+    try:
+        d = bare_extraction(raw, url=url, with_metadata=True,
+                            include_comments=False, favor_precision=True)
+    except Exception as exc:
+        log.debug("trafilatura fail %s: %s", url, exc)
+        return None, None
+    if not d:
+        return None, None
+    g = (lambda k: getattr(d, k, None)) if hasattr(d, "text") else d.get
+    return (g("text") or "").strip(), (g("title") or "").strip()
+
+
 def fetch_and_extract(url):
     try:
         r = requests.get(url, headers=HTTP_HEADERS, timeout=10)
@@ -299,30 +392,70 @@ def fetch_and_extract(url):
     except Exception as exc:
         log.debug("download fail %s: %s", url, exc)
         return None, None, None
-    text = title = None
+    text, title = _extract(r.content, url)
+    day = None
     try:
-        # bytes, не r.text: без Content-Type charset requests угадывает
-        # ISO-8859-1 и ломает не-латинские страницы (мойбейк); trafilatura
-        # сама детектит кодировку по meta/BOM надёжнее.
-        d = bare_extraction(r.content, url=url, with_metadata=True,
-                            include_comments=False, favor_precision=True)
-        if d:
-            g = (lambda k: getattr(d, k, None)) if hasattr(d, "text") else d.get
-            text = (g("text") or "").strip()
-            title = (g("title") or "").strip()
-    except Exception as exc:
-        log.debug("trafilatura fail %s: %s", url, exc)
-    pdate = None
-    try:
-        pdate = find_date(r.content, url=url, extensive_search=True, outputformat="%Y-%m-%d")
+        day = find_date(r.content, url=url, extensive_search=True, outputformat="%Y-%m-%d")
     except Exception:
         pass
-    return text, title, pdate
+    return text, title, _stamp(r.content, url, day, datetime.now(timezone.utc))
 
 
 def _is_non_event(title, text):
     hay = f"{(title or '').lower()} {(text or '')[:2000].lower()}"
     return any(re.search(p, hay) for p in NON_EVENT)
+
+
+def _rescue(urls):
+    """Последняя попытка: открыть страницу настоящим браузером.
+
+    Половина «текста нет» — это не отсутствие статьи, а отказ чужого сервера:
+    403 антибот-щиту, пустая двухсотка там, где текст рисует скрипт. camoufox
+    (Firefox с прикрытыми отпечатками) проходит первое и не проходит второе:
+    из двенадцати трудных адресов он вытащил три, и ровно те, что отвечали 403.
+
+    Ради этих трёх поднимать браузер в общем цикле незачем — он идёт отдельным
+    проходом в конце сбора, одним экземпляром на прогон и только по тем URL,
+    кому текущая неудача последняя. -> {url: (текст, заголовок, дата)}.
+    """
+    out = {}
+    if not urls:
+        return out
+    try:
+        from camoufox.sync_api import Camoufox
+    except ImportError:
+        log.warning("camoufox не установлен — спасать нечем")
+        return out
+    try:
+        with Camoufox(headless=True, humanize=False) as br:
+            for url in urls:
+                try:
+                    page = br.new_page()
+                    page.goto(url, timeout=30_000, wait_until="domcontentloaded")
+                    page.wait_for_timeout(1500)   # дорисовка после DOMContentLoaded
+                    raw = page.content().encode("utf-8")
+                    page.close()
+                except Exception as exc:
+                    log.debug("camoufox %s: %s", url, exc)
+                    continue
+                text, title = _extract(raw, url)
+                if text and len(text) >= settings.MIN_TEXT_LENGTH:
+                    out[url] = (text, title,
+                                _stamp(raw, url, None, datetime.now(timezone.utc)))
+    except Exception as exc:            # браузер может и не подняться
+        log.warning("camoufox не запустился: %s", exc)
+    log.info("Браузером спасено %d из %d", len(out), len(urls))
+    return out
+
+
+def _last_chance(conn, shorts):
+    """Из неудач — те, для кого эта попытка последняя: со следующего прогона
+    журнал перестанет их возвращать (seen_store.SHORT_TRIES)."""
+    if not shorts or settings.CAMOUFOX_MAX <= 0:
+        return []
+    tries = seen_store.attempts(conn, shorts)
+    return [u for u in shorts
+            if tries.get(u, 0) + 1 >= seen_store.SHORT_TRIES][:settings.CAMOUFOX_MAX]
 
 
 def collect():
@@ -343,30 +476,51 @@ def collect():
 
         now = datetime.now(timezone.utc).isoformat()
         pending, embed_texts, metas = [], [], []
+
+        def sift(item, got):
+            """Отсев одной статьи -> вердикт. Принятая попутно оседает в
+            metas/embed_texts. Вызывается дважды: из общего цикла и повторно
+            для того, что вытащил браузер, — правила отбора обязаны совпадать."""
+            url, country, gdate, ents = item
+            text, title, pdate = got
+            if not text or len(text) < settings.MIN_TEXT_LENGTH:
+                return "short"
+            if _is_non_event(title, text):
+                return "non_event"
+            th = _title_hash(title)
+            if th and th in known_hashes:
+                return "rejected"                       # дубль заголовка
+            if th:
+                known_hashes.add(th)
+            # эмбедим заголовок, не тело: полный текст статьи размывает
+            # сюжетное сходство (разная длина/цитаты/структура у разных
+            # изданий) и топит реальные дубли ниже DEDUP_COSINE.
+            embed_texts.append(title or text[:200])
+            metas.append((url, country, now, pdate or gdate, title, text,
+                          _detect_lang(text), th, ents))
+            return "accepted"
+
         # Загрузка страниц — I/O-bound, поэтому в пуле потоков. Фильтрация,
         # hash-дедуп и запись остаются на главном потоке (known_hashes без
         # блокировки; какой из дублей выиграет — не важно).
         def _fetch(item):
             return item, fetch_and_extract(item[0])
 
+        shorts = []
         with ThreadPoolExecutor(max_workers=settings.FETCH_WORKERS) as ex:
-            for (url, country, gdate, ents), (text, title, pdate) in \
-                    ex.map(_fetch, todo):
-                if not text or len(text) < settings.MIN_TEXT_LENGTH:
-                    pending.append((url, None, "short", None)); continue
-                if _is_non_event(title, text):
-                    pending.append((url, None, "non_event", None)); continue
-                th = _title_hash(title)
-                if th and th in known_hashes:
-                    pending.append((url, None, "rejected", None)); continue  # дубль заголовка
-                if th:
-                    known_hashes.add(th)
-                # эмбедим заголовок, не тело: полный текст статьи размывает
-                # сюжетное сходство (разная длина/цитаты/структура у разных
-                # изданий) и топит реальные дубли ниже DEDUP_COSINE.
-                embed_texts.append(title or text[:200])
-                metas.append((url, country, now, pdate or gdate, title, text,
-                              _detect_lang(text), th, ents))
+            for item, got in ex.map(_fetch, todo):
+                verdict = sift(item, got)
+                if verdict == "short":
+                    shorts.append(item)                 # вердикт после спасения
+                elif verdict != "accepted":
+                    pending.append((item[0], None, verdict, None))
+
+        # Кого сейчас спишут навсегда — тому браузер, остальным просто «short».
+        rescued = _rescue(_last_chance(conn, [i[0] for i in shorts]))
+        for item in shorts:
+            got = rescued.get(item[0])
+            if not (got and sift(item, got) == "accepted"):
+                pending.append((item[0], None, "short", None))
 
         # e5-эмбеддинги батчами (один проход модели), затем вставка.
         inserted = 0

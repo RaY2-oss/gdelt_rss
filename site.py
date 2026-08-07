@@ -405,15 +405,23 @@ def _tier(score):
 
 
 def _ago(dt, now):
-    """Человекочитаемый возраст. Точность до часа — лента почасовая."""
+    """Человекочитаемый возраст. Точность до часа — лента почасовая.
+
+    Сокращений («3 ч назад», «2 дн назад») здесь больше нет: подпись читают
+    глазами, а не парсят, и место под ней есть.
+    """
     mins = max(0, int((now - dt).total_seconds() // 60))
+    if mins < 1:
+        return "только что"
     if mins < 60:
-        return f"{mins} мин назад"
+        return f"{mins} {_plural(mins, 'минуту', 'минуты', 'минут')} назад"
     hours = mins // 60
     if hours < 24:
-        return f"{hours} ч назад"
+        return f"{hours} {_plural(hours, 'час', 'часа', 'часов')} назад"
     days = hours // 24
-    return f"{days} дн назад" if days < 7 else dt.strftime("%d.%m")
+    if days >= 7:
+        return dt.strftime("%d.%m")
+    return f"{days} {_plural(days, 'день', 'дня', 'дней')} назад"
 
 
 def _plural(n, one, few, many):
@@ -1068,10 +1076,13 @@ def _selfcheck():
     # даты публикации вне окна полосу не удлиняют и не схлопывают её в ноль
     assert len(days(now, {"2015-05-07"})) == 1, days(now, {"2015-05-07"})
 
-    assert _ago(now - timedelta(minutes=5), now) == "5 мин назад"
-    assert _ago(now - timedelta(hours=3), now) == "3 ч назад"
-    assert _ago(now - timedelta(days=2), now) == "2 дн назад"
-    assert _ago(now + timedelta(hours=1), now) == "0 мин назад"  # будущая дата
+    assert _ago(now - timedelta(minutes=1), now) == "1 минуту назад"
+    assert _ago(now - timedelta(minutes=5), now) == "5 минут назад"
+    assert _ago(now - timedelta(hours=3), now) == "3 часа назад"
+    assert _ago(now - timedelta(days=1), now) == "1 день назад"
+    assert _ago(now - timedelta(days=2), now) == "2 дня назад"
+    assert _ago(now - timedelta(days=9), now) == (now - timedelta(days=9)).strftime("%d.%m")
+    assert _ago(now + timedelta(hours=1), now) == "только что"   # будущая дата
     # Версия статики должна быть стабильна между вызовами и меняться от
     # содержимого — иначе ?v= либо не сбросит кэш, либо сбросит его каждый час.
     v = _asset_v()

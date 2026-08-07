@@ -11,7 +11,7 @@ settings.OUTPUT_DIR = tempfile.mkdtemp()
 settings.LOG_DIR = tempfile.mkdtemp()
 settings.TOP_N = 3
 
-import db, feeds, pipeline
+import db, feeds, pipeline, seen_store
 from datetime import datetime, timedelta, timezone
 
 
@@ -585,6 +585,80 @@ def test_translate_chunks_multibyte_script_without_sentence_breaks():
     assert len(chunks) > 1
     assert all(len(quote(c)) <= translate_mod._CHUNK for c in chunks)
     assert "".join(chunks) == text
+
+
+def test_browser_rescue_only_on_last_attempt():
+    """Браузер дорог, поэтому достаётся только тем, кого иначе спишут навсегда.
+    И вердикт у спасённого ровно один: «short» ставится ПОСЛЕ прохода спасения,
+    иначе одна статья получала бы в журнале две отметки и лишнюю попытку."""
+    import unittest.mock as mock
+
+    db.init()
+    conn = db.connect()
+    seen_store.ensure(conn)
+    # у 'tired' попытка уже была — эта последняя; 'fresh' встречен впервые
+    seen_store.mark(conn, [("http://r/tired", 0, "short", None)], "2026-08-06")
+
+    todo = {"http://r/tired": ("resqland", "2026-08-07", ""),
+            "http://r/fresh": ("resqland", "2026-08-07", ""),
+            "http://r/ok": ("resqland", "2026-08-07", "")}
+    def page(title):        # заголовки разные: одинаковые схлопнет дедуп
+        return ("текст статьи " * 40, title, "2026-08-07T10:00:00+00:00")
+    asked = []
+
+    def fake_rescue(urls):
+        asked.extend(urls)
+        return {u: page("Спасённая " + u) for u in urls}
+
+    with mock.patch.object(pipeline, "collect_urls", return_value=todo), \
+         mock.patch.object(pipeline, "fetch_and_extract",
+                           side_effect=lambda u: page(u) if u.endswith("/ok")
+                           else (None, None, None)), \
+         mock.patch.object(pipeline, "_rescue", side_effect=fake_rescue), \
+         mock.patch.object(pipeline, "_embed",
+                           side_effect=lambda t: np.ones((len(t), settings.EMBEDDING_DIM),
+                                                         np.float32)):
+        pipeline.collect()
+
+    verdicts = dict(conn.execute(
+        "SELECT url, verdict FROM seen_urls WHERE url LIKE 'http://r/%'"))
+    tries = seen_store.attempts(conn, todo)
+    conn.execute("DELETE FROM articles WHERE country='resqland'")   # база общая
+    conn.commit()
+    conn.close()
+
+    assert asked == ["http://r/tired"], asked      # 'fresh' получит ещё попытку сам
+    assert verdicts["http://r/tired"] == "accepted", verdicts
+    assert verdicts["http://r/fresh"] == "short", verdicts
+    assert tries["http://r/fresh"] == 1, tries     # одна неудача — одна отметка
+
+
+def test_stamp_reads_time_from_markup():
+    """Дата без времени — вся суточная лента с меткой 00:00, и сортировать её
+    нечем. Время у страницы почти всегда есть в её же разметке; проверяем, что
+    берём именно его, и что чужой часовой пояс или «обновлено» не заводят дату
+    в будущее."""
+    seen = datetime(2026, 8, 7, 12, 0, tzinfo=timezone.utc)
+
+    def st(html, hint=None):
+        return pipeline._stamp(html.encode("utf-8"), "http://x/", hint, seen)
+
+    # порядок доверия: <meta> раньше JSON-LD
+    assert st('<meta property="article:published_time" content="2026-08-07T09:30:00Z">'
+              '<script>{"datePublished":"2026-08-01T00:00:00Z"}</script>'
+              ) == "2026-08-07T09:30:00+00:00"
+    # content= перед именем — тот же тег, другой порядок атрибутов
+    assert st('<meta content="2026-08-06T08:15:00+03:00" name="pubdate">'
+              ).startswith("2026-08-06T08:15:00")
+    # разметки нет — остаётся календарная дата от htmldate
+    assert st("<html><body>ни даты, ни времени</body></html>",
+              "2026-08-05") == "2026-08-05T00:00:00+00:00"
+    # опубликовано позже, чем прочитано, не бывает: отбрасываем и падаем на hint
+    assert st('<meta property="datePublished" content="2026-09-01T00:00:00Z">',
+              "2026-08-05") == "2026-08-05T00:00:00+00:00"
+    # год копирайта в разметке — не дата статьи
+    assert st('<meta property="datePublished" content="1998-01-01T00:00:00Z">') is None
+    assert st("<html></html>") is None          # взять неоткуда — решает вызывающий
 
 
 def test_fetch_and_extract_decodes_utf8_without_charset_header():

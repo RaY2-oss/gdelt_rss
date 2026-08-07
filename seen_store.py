@@ -13,7 +13,9 @@
     non_event  — отсеяна regex-правилом (интервью/колонка/аналитика);
     pending    — решения НЕТ: провайдеры молчали или ответ не разобрался.
 
-Окончательны первые четыре. pending — это очередь, которую следующий прогон
+Окончательны первые четыре, но short — только со второй попытки (SHORT_TRIES):
+он говорит не о статье, а о том, как в эту секунду ответил чужой сервер.
+pending — это очередь, которую следующий прогон
 разбирает ДО сканирования новых дампов. Именно поэтому исчерпанный лимит или
 обрыв сети не превращают статью в вечный чёрный список: раньше такой сбой
 молча помечал батч как отклонённый (прогон week_swap 21.07: 6006 кандидатов,
@@ -27,6 +29,19 @@
 import sqlite3
 
 FINAL = ("accepted", "rejected", "short", "non_event")
+
+# Сколько раз пробуем скачать, прежде чем списать URL как «текста нет».
+#
+# «short» стоял в FINAL наравне с вердиктами LLM, и это была ошибка в самом
+# их сравнении: «нет» от модели — суждение о статье, а «текст не извлёкся» —
+# суждение о том, как в эту секунду ответил чужой сервер. Замер по журналу:
+# 14 183 URL списаны как короткие, и у всех до единого ровно одна попытка —
+# второй они не получали никогда. Проба сорока таких адресов показала, что
+# тринадцать из семнадцати ответивших двухсоткой отдают уже полный текст:
+# в тот раз это был таймаут, обрыв или лимит частоты у издания, а не отсутствие
+# статьи. Отсюда вторая попытка — URL возвращается в 24-часовом окне GKG сам,
+# и повтор ничего не стоит, кроме одной загрузки.
+SHORT_TRIES = 2
 
 DDL = """
 CREATE TABLE IF NOT EXISTS seen_urls (
@@ -53,14 +68,33 @@ def ensure(conn) -> None:
 
 
 def final_urls(conn, urls) -> set:
-    """Подмножество urls, по которым решение уже принято окончательно."""
+    """Подмножество urls, по которым решение уже принято окончательно.
+
+    «short» окончателен не сразу, а после SHORT_TRIES попыток: см. комментарий
+    к константе.
+    """
     urls = list(urls)
     out = set()
+    hard = tuple(v for v in FINAL if v != "short")
     for i in range(0, len(urls), _CHUNK):
         chunk = urls[i:i + _CHUNK]
-        q = ("SELECT url FROM seen_urls WHERE verdict IN (%s) AND url IN (%s)"
-             % (",".join("?" * len(FINAL)), ",".join("?" * len(chunk))))
-        out.update(r[0] for r in conn.execute(q, FINAL + tuple(chunk)))
+        q = ("SELECT url FROM seen_urls WHERE url IN (%s) AND ("
+             "  verdict IN (%s) OR (verdict='short' AND attempts >= ?))"
+             % (",".join("?" * len(chunk)), ",".join("?" * len(hard))))
+        out.update(r[0] for r in conn.execute(
+            q, tuple(chunk) + hard + (SHORT_TRIES,)))
+    return out
+
+
+def attempts(conn, urls) -> dict:
+    """url -> сколько раз мы его уже брали. Отсутствующие в журнале — ноль."""
+    urls = list(urls)
+    out = {}
+    for i in range(0, len(urls), _CHUNK):
+        chunk = urls[i:i + _CHUNK]
+        out.update(conn.execute(
+            "SELECT url, attempts FROM seen_urls WHERE url IN (%s)"
+            % ",".join("?" * len(chunk)), chunk))
     return out
 
 
@@ -109,3 +143,36 @@ def label_counts(conn) -> tuple:
         "SELECT SUM(verdict='accepted'), SUM(verdict='rejected') FROM seen_urls "
         "WHERE embedding IS NOT NULL").fetchone()
     return (row[0] or 0, row[1] or 0)
+
+
+def _selfcheck():
+    """Вторая попытка для «short» — ровно то, что молча ломается: одна лишняя
+    строка в WHERE, и либо короткие снова списываются с первого раза, либо
+    отказы LLM начинают скачиваться по кругу."""
+    import numpy as np
+    c = sqlite3.connect(":memory:")
+    ensure(c)
+    rows = [("u/acc", 0, "accepted", np.zeros(4, np.float32)),
+            ("u/rej", 0, "rejected", None),
+            ("u/non", 0, "non_event", None),
+            ("u/short", 0, "short", None),
+            ("u/pend", 0, "pending", None)]
+    mark(c, rows, "2026-08-07")
+
+    got = final_urls(c, [u for u, *_ in rows])
+    assert got == {"u/acc", "u/rej", "u/non"}, got   # короткий ждёт второй попытки
+    assert pending_urls(c, 0) == ["u/pend"]
+
+    mark(c, [("u/short", 0, "short", None)], "2026-08-08")   # вторая — и всё
+    assert "u/short" in final_urls(c, ["u/short"])
+
+    assert attempts(c, ["u/short", "u/rej", "u/нет"]) == {"u/short": 2, "u/rej": 1}
+
+    # окончательные вердикты вторых шансов не получают
+    mark(c, [("u/rej", 0, "rejected", None)], "2026-08-08")
+    assert final_urls(c, ["u/rej"]) == {"u/rej"}
+    print("seen_store selfcheck ok")
+
+
+if __name__ == "__main__":
+    _selfcheck()
