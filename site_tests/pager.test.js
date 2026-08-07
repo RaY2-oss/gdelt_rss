@@ -134,6 +134,16 @@ function goto(d, p) {
     assert.equal(+d.querySelector('.pager__num.is-here').textContent, 1,
       'нажатие на многоточие само перелистнуло страницу');
 
+    // ...и схлопывает её обратно, как только читатель ушёл на страницу.
+    [...pager.querySelectorAll('.pager__num')].find((b) => +b.textContent === mid).click();
+    assert.equal(+d.querySelector('.pager__num.is-here').textContent, mid,
+      'кнопка раскрытой страницы никуда не ведёт');
+    // В строке остаются только края и окрестность текущей страницы — всё, по
+    // чему сюда шли, свою работу сделало.
+    const after = numsOf();
+    assert.ok(after.every((n) => n === 1 || n === pages || Math.abs(n - mid) <= 1),
+      'в строке остались страницы, к текущей отношения не имеющие: ' + after.join(','));
+
     // ── размер страницы ────────────────────────────────────────────────
     goto(d, 1);
     const sel = d.querySelector('[data-pg-size]');

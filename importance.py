@@ -27,8 +27,14 @@
 
     3. Политический вес субъектов (entities.py) — как и раньше.
 
+Свёртка трёх факторов домножается на свежесть (`freshness`): витрина держит
+архив за две недели, и без затухания позавчерашний сюжет с сорока изданиями
+стоял бы над сегодняшним вечно. Затухание половинное и с полом — крупная
+старая новость опускается, но не исчезает.
+
 Веса факторов — в settings.IMPORTANCE_W_*; выставить любой в 0 значит
-выключить фактор, не трогая код.
+выключить фактор, не трогая код. Затухание снимается
+settings.IMPORTANCE_HALF_LIFE_DAYS = 0.
 """
 import math
 import re
@@ -141,6 +147,19 @@ def blend(lex, cov, ent, w_lex, w_cov, w_ent):
             + w_ent * np.asarray(ent, dtype=np.float64)) / total
 
 
+def freshness(age_days, half_life, floor):
+    """Множитель свежести в [floor, 1]: половина веса за каждые half_life суток.
+
+    Пол нужен, чтобы затухание не превращалось в удаление: сюжет, о котором
+    написали сорок изданий, через две недели должен стоять ниже сегодняшних,
+    но выше одиночной заметки — а не ниже всего на свете. half_life=0
+    выключает затухание целиком.
+    """
+    if half_life <= 0:
+        return 1.0
+    return floor + (1.0 - floor) * 0.5 ** (max(0.0, float(age_days)) / half_life)
+
+
 def body_emb(body_blob, title_blob):
     """Эмбеддинг ТЕЛА статьи; пока не досчитан — откат на заголовочный.
 
@@ -151,7 +170,7 @@ def body_emb(body_blob, title_blob):
     return np.frombuffer(body_blob or title_blob, np.float32)
 
 
-def structural(body_embs, urls, entity_cells, ent_df):
+def structural(body_embs, urls, entity_cells, ent_df, ages=None):
     """Важность сюжетов ОДНОЙ страны в [0,1] — свёртка трёх факторов выше.
 
     Единственная точка, где считается важность: её зовут и дайджест, и фид
@@ -164,6 +183,7 @@ def structural(body_embs, urls, entity_cells, ent_df):
     entity_cells — entity_cells[i]: ячейки entities всех статей сюжета i
     ent_df       — док-частота субъектов по окну этой страны (entities.document_freq);
                    пустая/незначимая -> фактор субъектов выключается сам
+    ages         — ages[i]: возраст сюжета в сутках (None -> без затухания)
 
     Веса берутся из settings.IMPORTANCE_W_*, любой в 0 выключает фактор.
     """
@@ -196,8 +216,16 @@ def structural(body_embs, urls, entity_cells, ent_df):
     else:
         ent = np.zeros(n, dtype=np.float64)
 
-    return blend(lex, cov, ent, settings.IMPORTANCE_W_LEXRANK,
-                 settings.IMPORTANCE_W_COVERAGE, settings.IMPORTANCE_W_ENTITY)
+    out = blend(lex, cov, ent, settings.IMPORTANCE_W_LEXRANK,
+                settings.IMPORTANCE_W_COVERAGE, settings.IMPORTANCE_W_ENTITY)
+    if ages is None:
+        return out
+    # Домножением, а не четвёртым слагаемым: свежесть — не заслуга сюжета, а
+    # срок годности того, что у него уже есть. Слагаемым она поднимала бы
+    # сегодняшнюю пустую заметку над вчерашней настоящей новостью.
+    return out * np.array([freshness(a, settings.IMPORTANCE_HALF_LIFE_DAYS,
+                                     settings.IMPORTANCE_AGE_FLOOR) for a in ages],
+                          dtype=np.float64)
 
 
 def _selfcheck():
@@ -235,6 +263,19 @@ def _selfcheck():
     assert np.allclose(b, [0.5, 0.5])
     b0 = blend([1.0, 0.0], [0.0, 1.0], [0.0, 0.0], 1.0, 0.0, 0.0)
     assert np.allclose(b0, [1.0, 0.0])
+
+    # Затухание: свежее не трогает, старое опускает, но не в ноль.
+    hl, floor = 4.0, 0.35
+    assert freshness(0, hl, floor) == 1.0
+    assert abs(freshness(hl, hl, floor) - (floor + (1 - floor) / 2)) < 1e-12
+    assert freshness(1, hl, floor) > 0.85       # сутки — окно фида, почти без потерь
+    assert floor < freshness(14, hl, floor) < 0.5
+    assert freshness(999, hl, floor) == floor   # упирается в пол, а не в ноль
+    assert freshness(3, 0, floor) == 1.0        # выключено
+    # Затухание перестраивает порядок только при близких весах: крупный старый
+    # сюжет остаётся выше свежей мелочи.
+    big_old, small_new = 0.90 * freshness(14, hl, floor), 0.20 * freshness(0, hl, floor)
+    assert big_old > small_new, (big_old, small_new)
     print("importance: ok")
 
 

@@ -157,19 +157,26 @@ def rank(groups):
     """{label: [строки]} -> [(label, важность)] по убыванию.
 
     Важность структурная (importance.structural): LexRank по эмбеддингам тел +
-    охват по доменам + вес субъектов. Оценкой LLM здесь не ранжируют — она
-    двоичная, «по теме или нет», и порядка не задаёт вовсе.
+    охват по доменам + вес субъектов, всё это с затуханием по возрасту.
+    Оценкой LLM здесь не ранжируют — она двоичная, «по теме или нет», и порядка
+    не задаёт вовсе.
+
+    Возраст сюжета — возраст его САМОЙ СВЕЖЕЙ статьи: сюжет, о котором пишут
+    сегодня, не старый, сколько бы дней назад он ни начался.
     """
     labels = list(groups)
     if not labels:
         return []
     reps = [max(groups[lab], key=lambda r: r[4] or "") for lab in labels]
     ent_df = entities.document_freq(r[11] for lab in labels for r in groups[lab])
+    now = datetime.now(timezone.utc)
+    ages = [min((now - _pubdate(r[3], r[4])).total_seconds()
+                for r in groups[lab]) / 86400.0 for lab in labels]
     scores = imp.structural(
         [imp.body_emb(r[10], r[6]) for r in reps],
         [[r[0] for r in groups[lab]] for lab in labels],
         [[r[11] or "" for r in groups[lab]] for lab in labels],
-        ent_df)
+        ent_df, ages)
     return sorted(zip(labels, scores), key=lambda kv: kv[1], reverse=True)
 
 

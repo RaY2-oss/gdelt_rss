@@ -459,7 +459,7 @@
     if (!mb || !ml) return;
     var isOn = !!keptSet[ml];
     mb.setAttribute('aria-pressed', isOn ? 'true' : 'false');
-    mb.title = isOn ? 'Убрать из отложенного' : 'Отложить (клавиша s)';
+    mb.title = isOn ? 'Убрать из отложенного' : 'Отложить сюжет';
     art.classList.toggle('is-kept', isOn);
   };
 
@@ -473,7 +473,7 @@
       keptBtn.hidden = !saved.length;
       var num = keptBtn.querySelector('[data-kept-n]');
       if (num) num.textContent = saved.length;
-      keptBtn.title = 'Отложенное: ' + saved.length + ' (клавиша o)';
+      keptBtn.title = 'Отложенное: ' + saved.length;
     }
     if (!keptBox) return;
 
@@ -915,6 +915,10 @@
       ensure();
       turn = p > page ? 1 : -1;
       page = p;
+      // Раскрытая середина — лестница, по которой сюда дошли, а не выбор
+      // читателя: он его уже сделал. Дальше она только загромождает строку,
+      // поэтому пропуски схлопываются обратно, как только страница сменилась.
+      opened = {};
       draw();
       animate();
       var y = feedBox.getBoundingClientRect().top + scrollY - 72;
