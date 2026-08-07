@@ -133,6 +133,7 @@
 {% macro story(s, show_country=True, i=0, no=1, eyebrow=None) %}
 <article class="story" style="--w: {{ s.score }}; --i: {{ i if i < 20 else 20 }}" data-tier="{{ s.tier }}"
          data-score="{{ s.score }}" data-day="{{ s.day }}" data-url="{{ s.url }}"
+         data-tp="{{ s.tp }}"
          data-find="{{ s.title|lower }} {{ s.country_ru|lower }} {{ s.domain }} {% for e in s.entities %}{{ ru_name(e)|lower }} {% endfor %}">
   <div class="story__sig">
     <span class="story__no">{{ no }}</span>
@@ -206,6 +207,36 @@
     </li>
     {% endfor %}
   </ol>
+</div>
+{% endmacro %}
+
+
+{# Полоса подтем. Лента отвечает, где (страна, регион) и когда (полоса дат), а
+   это — про что: ИИ отдельно, кванты отдельно, чипы отдельно. Тему проставляет
+   сборка словарём (topics.py), кнопка знает свою тему битом маски, и весь
+   фильтр в браузере — пересечение двух чисел.
+
+   Выключены все по умолчанию, в отличие от дат: даты — отрезок, из которого
+   вырезают, темы — набор, в который выбирают. Выбранных может быть несколько,
+   и сюжет проходит по любой из них: у сюжета тема тоже не одна.
+
+   Числа под подписями и скрытие пустых тем — на app.js: сколько сюжетов темы в
+   этой области, страница знает только вместе с архивом, а он приезжает потом. #}
+{% macro themes() %}
+<div class="tops" data-tops hidden>
+  <div class="tops__top">
+    <span class="tops__label">Подтемы</span>
+    <span class="tops__hint">можно несколько</span>
+    <button class="tops__reset" type="button" data-tops-reset hidden>все темы</button>
+  </div>
+  <ul class="tops__row">
+    {% for slug, name in topic_list %}
+    <li>
+      <button class="tops__btn" type="button" data-bit="{{ 2 ** loop.index0 }}"
+              aria-pressed="false" hidden>{{ name }}<b class="tops__n"></b></button>
+    </li>
+    {% endfor %}
+  </ul>
 </div>
 {% endmacro %}
 
@@ -314,6 +345,7 @@
   </summary>
   <div class="tools__body">
     {{ legend() }}
+    {{ themes() }}
     {{ dates(days) }}
     {{ filter(placeholder) }}
   </div>

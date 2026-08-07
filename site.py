@@ -38,6 +38,7 @@ import glossary
 import importance as imp
 import feeds
 import overview
+import topics
 from feeds import _pubdate
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -554,6 +555,8 @@ def stories(conn, rows, country, now):
         # авторским текстом, которым он не является.
         over = [{"text": s, "domain": by_url.get(_safe_url(u), imp.domain(u)),
                  "url": _safe_url(u)} for u, s in lines if s]
+        tlist = topics.of([c for c in cands if c],
+                          " ".join(o["text"] for o in over) or (x_ru or x_en or text or ""))
         dt = _pubdate(pdate, fetched)
         # Структурная важность приходит в [0,1] (importance.structural); шкала
         # 0-100 — только для показа, столбик и ступень тона считают по ней.
@@ -608,6 +611,15 @@ def stories(conn, rows, country, now):
             # имена, записанные прежними прогонами, и обстановку страницы
             # («whatsapp linkedin») надо отсеять на чтении.
             "entities": entities.split(ents)[:4],
+            # Подтемы сюжета. Заголовками идут ВСЕ издания кластера, а не один
+            # выбранный: двенадцать заголовков про одно событие — двенадцать
+            # попыток назвать его тему, и достаточно, чтобы слово «полупроводник»
+            # нашлось хотя бы у одного. Телом — обзор и подводка, то есть уже
+            # отобранные предложения, а не сырая статья с её подвалом.
+            "topics": tlist,
+            # То же маской: в разметке ею фильтрует app.js, в search.json она
+            # едет вместо списка слагов (шесть тысяч строк — вчетверо легче).
+            "tp": topics.mask(tlist),
             "country": country,
             "country_ru": RU_COUNTRY.get(country, settings.country_display(country)),
             # Эмбеддинг тела головной статьи — только чтобы посчитать похожие
@@ -735,11 +747,14 @@ def search_index(everything, regions, near=None):
         # обзор сюда не влезает: он у сюжета до трёх абзацев с подписями, это
         # ещё два мегабайта на корпус ради того, что читатель откроет у
         # единиц. Полторы строки — ровно столько, чтобы понять, о чём сюжет.
+        # Темы едут маской (topics.mask), а не списком слагов: полоса подтем
+        # фильтрует и архивную часть ленты тоже, иначе «только про ИИ» резало бы
+        # первую сотню в разметке и пропускало весь хвост из этого же файла.
         "s": [[s["title"], ci[s["country"]], di[s["day"]], s["score"],
                s["url"], s["domain"], ";".join(s["entities"]),
                _snippet(s["snippet"] or (s["overview"][0]["text"] if s["overview"] else ""),
                         limit=130),
-               s["outlets"]]
+               s["outlets"], s["tp"]]
               for s in everything],
         # Похожие сюжеты — индексы в том же массиве s. Лежат здесь, а не в
         # разметке: показываются по требованию, и корпус к этому моменту уже
@@ -858,6 +873,9 @@ def _env():
     # именно global, а не переменная рендера: макросы в _story.html
     # импортируются без `with context` и переменных страницы не видят
     env.globals["important_at"] = IMPORTANT_AT
+    # Список подтем — тоже global: полосу подтем ставит макрос из _story.html,
+    # а он импортируется без контекста страницы.
+    env.globals["topic_list"] = topics.ALL
     env.globals["period_acc"], env.globals["period_gen"] = _period_words(SITE_DAYS)
     return env
 

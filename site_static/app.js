@@ -32,6 +32,10 @@
   // полоса дат могла его дёрнуть, даже если фильтра на странице нет.
   var apply = function () {};
   var dayPass = null; // null — все дни
+  // Подтемы — битовая маска (см. topics.py): 0 значит «все», а не «никакие».
+  // Выбранных тем может быть несколько, и сюжет проходит по любой из них: тема
+  // у сюжета тоже не одна (чипы для ИИ — и то, и другое).
+  var topPass = 0;
 
   // ── Корпус архива ─────────────────────────────────────────────────────
   // Один файл на весь архив: страница носит с собой только первую сотню
@@ -83,6 +87,10 @@
   // Гистограмму дат рисует полоса дат, а пересчитывает листалка — когда
   // подтянет архив и в счёт войдёт не только то, что лежит в разметке.
   var drawHist = function () {};
+  // То же с числами у подтем: пока архив не приехал, они считаны по сотне строк
+  // разметки, и после его прихода обязаны пересчитаться — иначе кнопка обещает
+  // девять сюжетов, а показывает двести.
+  var countTops = function () {};
 
   // ── Атлас ─────────────────────────────────────────────────────────────
   // Панель ложится поверх страницы и ничего не двигает, поэтому и состояние
@@ -396,6 +404,72 @@
     if (reset) reset.addEventListener('click', function () { mark(0, btns.length - 1); });
   }
 
+  // ── Полоса подтем ─────────────────────────────────────────────────────
+  // Лента отвечает, где и когда; подтема отвечает, про что. Тема у сюжета
+  // проставлена на сборке словарём (topics.py) и приезжает маской в data-tp —
+  // здесь только пересечение масок, никакого разбора текста.
+  //
+  // Кнопки по умолчанию выключены все, и это не то же самое, что полоса дат,
+  // где включён весь период: даты — непрерывный отрезок, из которого вырезают,
+  // а темы — набор, в который выбирают. Тема без сюжетов в этой области кнопку
+  // не получает вовсе: девять подписей, из которых работают две, — это не
+  // выбор, а список того, чего нет.
+  var tops = q$('[data-tops]');
+  if (tops && stories.length) {
+    var tbtns = all('.tops__btn');
+    var tReset = tops.querySelector('[data-tops-reset]');
+
+    // tail — архивная часть ленты; пока листалка её не подтянула, счёт идёт по
+    // той сотне, что лежит в разметке, и потом пересчитывается (см. ensure).
+    countTops = function (tail) {
+      var per = {};
+      var add = function (tp) {
+        if (!tp) return;
+        tbtns.forEach(function (b) {
+          if (tp & +b.dataset.bit) per[b.dataset.bit] = (per[b.dataset.bit] || 0) + 1;
+        });
+      };
+      stories.forEach(function (n) { add(+n.dataset.tp || 0); });
+      if (tail) tail.forEach(function (t) { add(t.s[9] || 0); });
+
+      var live = 0;
+      tbtns.forEach(function (b) {
+        var n = per[b.dataset.bit] || 0;
+        b.querySelector('.tops__n').textContent = n;
+        // Кнопка пропавшей темы не просто гаснет, а уходит: нажимать не на что.
+        // Уже выбранную не трогаем — иначе фильтр снимет сам себя.
+        b.hidden = !n && !b.classList.contains('is-on');
+        if (!b.hidden) live++;
+      });
+      tops.hidden = !live;
+    };
+    countTops(null);
+
+    tops.addEventListener('click', function (e) {
+      var b = e.target.closest('.tops__btn');
+      if (!b) return;
+      var on = !b.classList.contains('is-on');
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      topPass = 0;
+      tbtns.forEach(function (x) {
+        if (x.classList.contains('is-on')) topPass |= +x.dataset.bit;
+      });
+      if (tReset) tReset.hidden = !topPass;
+      apply();
+    });
+
+    if (tReset) tReset.addEventListener('click', function () {
+      tbtns.forEach(function (b) {
+        b.classList.remove('is-on');
+        b.setAttribute('aria-pressed', 'false');
+      });
+      topPass = 0;
+      tReset.hidden = true;
+      apply();
+    });
+  }
+
   // ── Отложенное ────────────────────────────────────────────────────────
   // Список закладок живёт в localStorage браузера. Сервера у витрины нет —
   // после часовой сборки всё раздаёт nginx, — поэтому «сохранить у себя»
@@ -696,6 +770,7 @@
         stories.forEach(function (n) { per[n.dataset.day] = (per[n.dataset.day] || 0) + 1; });
         tail.forEach(function (t) { per[t.day] = (per[t.day] || 0) + 1; });
         drawHist(per);
+        countTops(tail);
         draw();
       });
     };
@@ -826,12 +901,13 @@
 
     var draw = function () {
       var v = word ? word.value.trim().toLowerCase() : '';
-      var narrowed = !!(v || dayPass);
+      var narrowed = !!(v || dayPass || topPass);
 
       var live = [];
       stories.forEach(function (n) {
         if ((!v || (n.dataset.find || '').indexOf(v) !== -1) &&
-            (!dayPass || dayPass.indexOf(n.dataset.day) !== -1)) live.push(n);
+            (!dayPass || dayPass.indexOf(n.dataset.day) !== -1) &&
+            (!topPass || (+n.dataset.tp & topPass))) live.push(n);
         else n.hidden = true;
       });
 
@@ -841,6 +917,7 @@
           var t = tail[i];
           if (v && t.hay.indexOf(v) === -1) continue;
           if (dayPass && dayPass.indexOf(t.day) < 0) continue;
+          if (topPass && !(t.s[9] & topPass)) continue;
           rest.push(t);
         }
       }

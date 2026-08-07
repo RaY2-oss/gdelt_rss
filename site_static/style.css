@@ -826,6 +826,7 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
 /* Внутри пульта приборы стоят на его же поле: своя рамка и своя подложка у
    полосы дат превращали панель в коробку внутри коробки. */
 .tools__body .axis { margin-top: 0.5rem; }
+.tools__body .tops { margin-top: 1.125rem; }
 .tools__body .days {
   margin-top: 1.125rem;
   padding: 0;
@@ -862,6 +863,74 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
   font-variant-numeric: tabular-nums;
   color: var(--ink-3);
 }
+
+/* ── Полоса подтем ────────────────────────────────────────────────────── */
+/* Кнопки, а не выпадающий список: тем девять, они видны все сразу, и рядом с
+   каждой стоит её счёт — сколько сюжетов темы в этой области. Выбранная тема
+   заливается тоном, а не обводится: обводка на кнопке рядом с полосой дат
+   читалась как «поле ввода». */
+.tops { margin-top: 1.5rem; }
+.tops__top {
+  display: flex;
+  align-items: baseline;
+  gap: 0.625rem;
+  margin-bottom: 0.5rem;
+  font: 400 0.6875rem/1 var(--font-data);
+  color: var(--ink-3);
+}
+.tops__label { text-transform: uppercase; letter-spacing: 0.14em; }
+.tops__hint {
+  color: var(--rule-strong);
+  margin-inline-start: auto;
+  white-space: nowrap;
+}
+.tops__reset {
+  margin-inline-start: auto;
+  padding: 0.1875rem 0.5rem;
+  background: var(--ink);
+  color: var(--panel);
+  border: 0;
+  border-radius: var(--r);
+  font: 400 0.6875rem/1.2 var(--font-data);
+  cursor: pointer;
+}
+.tops__reset:hover { background: var(--ink-2); }
+.tops__top:has(.tops__reset:not([hidden])) .tops__hint { display: none; }
+
+.tops__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3125rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.tops__btn {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  padding: 0.3125rem 0.625rem;
+  background: var(--panel-sunk);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  color: var(--ink-2);
+  font: 400 0.75rem/1.1 var(--font-data);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.tops__btn:hover { color: var(--ink); border-color: var(--rule-strong); }
+.tops__n {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.6875rem;
+  font-weight: 400;
+  color: var(--ink-3);
+}
+.tops__btn.is-on {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--panel);
+}
+.tops__btn.is-on .tops__n { color: var(--panel); opacity: 0.7; }
 
 /* ── Полоса дат: фильтр, который заодно график ────────────────────────── */
 /* На витрине лежит весь архив. Отдать его выпадающим списком «за сегодня / за
