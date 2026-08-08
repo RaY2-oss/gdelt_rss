@@ -117,7 +117,9 @@ def _get_model_st():
 
 
 def _cfg(fips: str) -> dict:
-    return {"themes": settings.SCITECH_THEMES, "locations": [fips],
+    # Кодов у страны бывает несколько: FIPS разводит Западный берег и Газу,
+    # а фид у Палестины один (см. settings.COUNTRIES).
+    return {"themes": settings.SCITECH_THEMES, "locations": fips.split("+"),
             "max_theme_loc_gap": settings.MAX_THEME_LOC_GAP,
             "min_country_share": settings.MIN_COUNTRY_SHARE}
 

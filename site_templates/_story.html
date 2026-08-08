@@ -157,6 +157,11 @@
       {# язык у части статей не определился — тогда просто «перевод», без «пер. с » в никуда #}
       {% if s.translated %}<span class="story__tag">{{ 'пер. с ' ~ s.lang if s.lang else 'перевод' }}</span>
       {% elif s.lang %}<span class="story__tag story__tag--plain">{{ s.lang }}</span>{% endif %}
+      {# Подтема стоит и на самой карточке, не только кнопкой в «Отборе»: по
+         ленте видно, про что сюжет, до того как её начали резать. Подпись, а
+         не кнопка — нажатие меняло бы фильтр, спрятанный в свёрнутой панели,
+         и лента перестраивалась бы от щелчка по метке. #}
+      {% for t in s.tops %}<span class="story__top">{{ t }}</span>{% endfor %}
     </p>
 
     {{ digest(s) }}
@@ -232,8 +237,11 @@
   <ul class="tops__row">
     {% for slug, name in topic_list %}
     <li>
+      {# data-name — не украшение: по нему app.js подписывает подтему на
+         карточках, которые сам и рисует (хвост ленты из search.json, где от
+         темы приезжает только бит маски). #}
       <button class="tops__btn" type="button" data-bit="{{ 2 ** loop.index0 }}"
-              aria-pressed="false" hidden>{{ name }}<b class="tops__n"></b></button>
+              data-name="{{ name }}" aria-pressed="false" hidden>{{ name }}<b class="tops__n"></b></button>
     </li>
     {% endfor %}
   </ul>

@@ -747,6 +747,11 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
 .tools__hint { color: var(--ink-3); }
 .tools[open] .tools__hint { visibility: hidden; }
 .tools__body { padding: 0 0.8125rem 1rem; }
+/* Пока архив в пути, цифры под столбиками и у тем посчитаны по сотне строк
+   разметки, а не по всей глубине. Гасим их до правильных: число, которое
+   вот-вот сменится, лучше показать неготовым, чем уверенным и неверным. */
+.tools.is-stale .days__n,
+.tools.is-stale .tops__n { opacity: 0.35; transition: opacity 0.15s; }
 /* Внутри пульта приборы стоят на его же поле: своя рамка и своя подложка у
    полосы дат превращали панель в коробку внутри коробки. */
 .tools__body .axis { margin-top: 0.5rem; }
@@ -1188,6 +1193,14 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
   padding: 0.0625rem 0.375rem;
   border: 1px solid var(--rule);
   border-radius: var(--r);
+}
+/* Подтема — заливкой, а не рамкой, как у языка: рамка в этой строке уже
+   значит служебную пометку о переводе, а подтема говорит про содержание. */
+.story__top {
+  padding: 0.0625rem 0.375rem;
+  background: var(--track);
+  border-radius: var(--r);
+  color: var(--ink-2);
 }
 
 .story__snippet {

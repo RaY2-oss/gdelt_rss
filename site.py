@@ -47,7 +47,9 @@ STATIC_DIR = os.path.join(BASE_DIR, "site_static")
 OUT_DIR = os.environ.get("GDELT_SITE_OUT", "/var/www/rss_site")
 
 SITE_TITLE = "Bhutyan.online"
-SITE_TAGLINE = "Наука и технологии 89 стран Азии и Африки"
+# Число стран не пишется руками: гео-матрица растёт, а подпись, разошедшаяся с
+# ней, — самая заметная неправда на странице.
+SITE_TAGLINE = "Наука и технологии %d стран Азии и Африки" % len(settings.COUNTRIES)
 FEED_BASE = "https://rss.bhutyan.online"
 
 # Окно витрины — весь архив, что живёт в БД (settings.ARCHIVE_DAYS), одно и то
@@ -113,21 +115,26 @@ REGIONS = [
      ["kazakhstan", "uzbekistan", "turkmenistan", "kyrgyzstan", "tajikistan"]),
     ("west_asia", "Западная Азия",
      ["turkey", "iran", "iraq", "saudi_arabia", "uae", "israel", "qatar",
-      "kuwait", "oman", "bahrain", "jordan", "lebanon", "syria", "yemen"]),
+      "kuwait", "oman", "bahrain", "jordan", "lebanon", "syria", "yemen",
+      "armenia", "azerbaijan", "georgia", "cyprus", "palestine"]),
     ("north_africa", "Северная Африка",
      ["egypt", "libya", "tunisia", "algeria", "morocco", "sudan"]),
     ("west_africa", "Западная Африка",
      ["nigeria", "ghana", "senegal", "ivory_coast", "mali", "burkina_faso",
       "niger", "guinea", "benin", "togo", "sierra_leone", "liberia",
-      "mauritania", "gambia"]),
+      "mauritania", "gambia", "cape_verde", "guinea_bissau"]),
     ("east_africa", "Восточная Африка",
      ["kenya", "tanzania", "uganda", "ethiopia", "rwanda", "somalia",
-      "south_sudan", "eritrea"]),
+      "south_sudan", "eritrea", "burundi", "djibouti", "comoros",
+      "seychelles"]),
     ("central_africa", "Центральная Африка",
-     ["cameroon", "dr_congo", "congo", "chad", "gabon", "angola"]),
+     ["cameroon", "dr_congo", "congo", "chad", "gabon", "angola",
+      "central_african_republic", "equatorial_guinea",
+      "sao_tome_and_principe"]),
     ("southern_africa", "Южная Африка",
      ["south_africa", "zimbabwe", "zambia", "mozambique", "botswana",
-      "namibia", "madagascar", "malawi", "mauritius"]),
+      "namibia", "madagascar", "malawi", "mauritius", "lesotho",
+      "eswatini"]),
 ]
 
 RU_COUNTRY = {
@@ -148,21 +155,29 @@ RU_COUNTRY = {
     "saudi_arabia": "Саудовская Аравия", "uae": "ОАЭ", "israel": "Израиль",
     "qatar": "Катар", "kuwait": "Кувейт", "oman": "Оман", "bahrain": "Бахрейн",
     "jordan": "Иордания", "lebanon": "Ливан", "syria": "Сирия", "yemen": "Йемен",
+    "armenia": "Армения", "azerbaijan": "Азербайджан", "georgia": "Грузия",
+    "cyprus": "Кипр", "palestine": "Палестина",
     "egypt": "Египет", "libya": "Ливия", "tunisia": "Тунис",
     "algeria": "Алжир", "morocco": "Марокко", "sudan": "Судан",
     "nigeria": "Нигерия", "ghana": "Гана", "senegal": "Сенегал",
     "ivory_coast": "Кот-д’Ивуар", "mali": "Мали", "burkina_faso": "Буркина-Фасо",
     "niger": "Нигер", "guinea": "Гвинея", "benin": "Бенин", "togo": "Того",
     "sierra_leone": "Сьерра-Леоне", "liberia": "Либерия",
-    "mauritania": "Мавритания", "gambia": "Гамбия",
+    "mauritania": "Мавритания", "gambia": "Гамбия", "cape_verde": "Кабо-Верде",
+    "guinea_bissau": "Гвинея-Бисау",
     "kenya": "Кения", "tanzania": "Танзания", "uganda": "Уганда",
     "ethiopia": "Эфиопия", "rwanda": "Руанда", "somalia": "Сомали",
-    "south_sudan": "Южный Судан", "eritrea": "Эритрея",
+    "south_sudan": "Южный Судан", "eritrea": "Эритрея", "burundi": "Бурунди",
+    "djibouti": "Джибути", "comoros": "Коморы", "seychelles": "Сейшелы",
     "cameroon": "Камерун", "dr_congo": "ДР Конго", "congo": "Конго",
     "chad": "Чад", "gabon": "Габон", "angola": "Ангола",
+    "central_african_republic": "ЦАР",
+    "equatorial_guinea": "Экваториальная Гвинея",
+    "sao_tome_and_principe": "Сан-Томе и Принсипи",
     "south_africa": "ЮАР", "zimbabwe": "Зимбабве", "zambia": "Замбия",
     "mozambique": "Мозамбик", "botswana": "Ботсвана", "namibia": "Намибия",
     "madagascar": "Мадагаскар", "malawi": "Малави", "mauritius": "Маврикий",
+    "lesotho": "Лесото", "eswatini": "Эсватини",
 }
 
 RU_LANG = {
@@ -956,6 +971,14 @@ def build(out_dir=OUT_DIR):
             # То же маской: в разметке ею фильтрует app.js, в search.json она
             # едет вместо списка слагов (шесть тысяч строк — вчетверо легче).
             item["tp"] = topics.mask(tlist)
+            # И подписями — на самой карточке. «Прочее» на ней не пишется: это
+            # не тема, а её отсутствие. Больше трёх не ставим: строка под
+            # заголовком и без того несёт важность, страну, издания и дату.
+            # Порядок — как в topics.json, а не по силе попадания: те же метки
+            # app.js ставит хвосту ленты по маске, где никакого порядка нет, и
+            # разойтись подписи у одного сюжета в разных местах не должны.
+            item["tops"] = [name for slug, name in topics.ALL
+                            if slug in tlist and slug != topics.OTHER][:3]
 
         # Похожие сюжеты считаются один раз на всю сборку и живут в search.json
         # индексами; сюжету остаётся только их число — по нему шаблон решает,

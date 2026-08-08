@@ -73,12 +73,82 @@ const settle = async () => { for (let i = 0; i < 6; i++) await wait(); };
     ', с несколькими темами ' + (100 * many / j.s.length).toFixed(0) + ' %');
 
   {
-    const { d } = boot('index.html');
+    const { w, d } = boot('index.html');
     const strip = d.querySelector('[data-tops]');
     assert.ok(strip && !strip.hidden, 'полоса подтем не показалась');
 
     const btns = vis(d, '.tops__btn');
     assert.ok(btns.length >= 3, 'кнопок подтем слишком мало: ' + btns.length);
+
+    // Раскрытие панели «Отбор» обязано подтянуть архив. Иначе цифры у тем и
+    // под столбиками дат посчитаны по сотне строк разметки, читатель видит их
+    // первыми и верит им — а после первого же нажатия они меняются втрое.
+    const num = (b) => +b.querySelector('.tops__n').textContent;
+    // Панелей с классом .tools на главной две — атлас и «Отбор»; нужна та, в
+    // которой стоит фильтр.
+    const panel = d.querySelector('[data-filter]').closest('.tools');
+    const before = num(btns[0]);
+    assert.ok(before <= 100, 'до раскрытия счёт идёт по сотне: ' + before);
+    assert.ok(panel.classList.contains('is-stale') === false,
+      'счётчики приглушены до раскрытия панели');
+    panel.open = true;
+    panel.dispatchEvent(new w.Event('toggle'));
+    await settle();
+    const after = num(btns[0]);
+    const real = j.s.filter((s) => s[9] & +btns[0].dataset.bit).length;
+    assert.equal(after, real,
+      'после раскрытия счёт темы не по корпусу: ' + after + ' вместо ' + real);
+    assert.ok(!panel.classList.contains('is-stale'), 'приглушение не снялось');
+    console.log('  «Отбор» раскрыт: тема «' + btns[0].textContent.trim().split('\n')[0] +
+      '» ' + before + ' → ' + after);
+
+    // Метка подтемы на самой карточке. Источников подписи два — сборщик
+    // (s.tops в шаблоне) и app.js по маске из корпуса, — и разойтись они не
+    // должны: одна и та же лента, разные строки. Сверяем обе с той же маской,
+    // которой живёт фильтр. «Прочее» — последняя кнопка — на карточке не
+    // пишется, больше трёх подписей не ставится.
+    const named = [...d.querySelectorAll('.tops__btn')].slice(0, -1)
+      .map((b) => [+b.dataset.bit, b.dataset.name]);
+    const want = (tp) => named.filter(([bit]) => tp & bit).map((x) => x[1]).slice(0, 3);
+    const marks = (n) => [...n.querySelectorAll('.story__top')].map((x) => x.textContent);
+    let seen = 0;
+    [...d.querySelectorAll('.story[data-tp]')].forEach((n) => {
+      const tp = +n.dataset.tp;
+      // Сверяем и порядок: у сюжета с четырьмя темами показаны первые три, и
+      // «первые» обязаны значить одно и то же в разметке и в хвосте ленты.
+      assert.deepEqual(marks(n), want(tp),
+        'метки карточки разошлись с маской ' + tp + ': ' + marks(n).join('/'));
+      seen += marks(n).length ? 1 : 0;
+    });
+    assert.ok(seen > d.querySelectorAll('.story[data-tp]').length * 0.5,
+      'меток подтем на карточках почти нет: ' + seen);
+
+    // Хвост ленты рисует app.js, и подписи он берёт с кнопок полосы. Сотня по
+    // странице и вторая страница — значит все карточки из корпуса, ни одной
+    // из разметки.
+    const sel = d.querySelector('[data-pg-size]');
+    sel.value = '100';
+    sel.dispatchEvent(new w.Event('change'));
+    await settle();
+    d.querySelector('[data-pg="1"]').click();
+    await settle();
+    const brief = vis(d, '.story--brief');
+    assert.ok(brief.length > 10, 'хвост ленты не нарисовался: ' + brief.length);
+    const byTitle = {};
+    j.s.forEach((s) => { byTitle[s[0]] = s[9]; });
+    brief.forEach((n) => {
+      const tp = byTitle[n.querySelector('.story__title').textContent];
+      if (tp === undefined) return;
+      assert.deepEqual(marks(n), want(tp),
+        'метки хвостовой карточки разошлись с корпусом: ' + marks(n).join('/'));
+    });
+    console.log('  меток на карточках: ' + seen + ' из сотни в разметке, ' +
+      'в хвосте проверено ' + brief.length);
+    d.querySelector('[data-pg="-1"]').click();
+    await settle();
+    sel.value = '20';
+    sel.dispatchEvent(new w.Event('change'));
+    await settle();
 
     // Пустых кнопок быть не должно: тема без сюжетов уходит целиком.
     btns.forEach((b) => {

@@ -250,6 +250,13 @@ SCITECH_THEMES = [
 # ── Гео-матрица: имя фида → FIPS 10-4 (GDELT V2EnhancedLocations CC) ─────────
 # Азия + Африка, порт старого COUNTRIES. FIPS ≠ ISO (Turkey=TU, China=CH,
 # Japan=JA, …). Один фид = одна страна.
+#
+# Здесь ВСЕ государства обеих частей света — 54 члена ООН в Африке, 48 в Азии,
+# плюс Палестина (наблюдатель) и Тайвань, Гонконг, Макао, у которых свои
+# издания и свой FIPS. Кодов у страны может быть несколько (через «+»): у
+# Палестины FIPS разводит Западный берег и Газу, а фид у неё один.
+# Не входят несамоуправляющиеся территории (Западная Сахара, Реюньон,
+# Британские территории в Индийском океане): своей научной прессы у них нет.
 COUNTRIES = {
     # Южная Азия
     "india": "IN", "pakistan": "PK", "bangladesh": "BG", "sri_lanka": "CE",
@@ -264,10 +271,13 @@ COUNTRIES = {
     # Центральная Азия
     "kazakhstan": "KZ", "uzbekistan": "UZ", "turkmenistan": "TX",
     "kyrgyzstan": "KG", "tajikistan": "TI",
-    # Западная Азия / Ближний Восток
+    # Западная Азия / Ближний Восток (с Закавказьем и Кипром — по ООН это
+    # Западная Азия, а не Европа)
     "turkey": "TU", "iran": "IR", "iraq": "IZ", "saudi_arabia": "SA",
     "uae": "AE", "israel": "IS", "qatar": "QA", "kuwait": "KU", "oman": "MU",
     "bahrain": "BA", "jordan": "JO", "lebanon": "LE", "syria": "SY", "yemen": "YM",
+    "armenia": "AM", "azerbaijan": "AJ", "georgia": "GG", "cyprus": "CY",
+    "palestine": "WE+GZ",
     # Северная Африка
     "egypt": "EG", "libya": "LY", "tunisia": "TS", "algeria": "AG",
     "morocco": "MO", "sudan": "SU",
@@ -275,17 +285,20 @@ COUNTRIES = {
     "nigeria": "NI", "ghana": "GH", "senegal": "SG", "ivory_coast": "IV",
     "mali": "ML", "burkina_faso": "UV", "niger": "NG", "guinea": "GV",
     "benin": "BN", "togo": "TO", "sierra_leone": "SL", "liberia": "LI",
-    "mauritania": "MR", "gambia": "GA",
+    "mauritania": "MR", "gambia": "GA", "cape_verde": "CV",
+    "guinea_bissau": "PU",
     # Восточная Африка
     "kenya": "KE", "tanzania": "TZ", "uganda": "UG", "ethiopia": "ET",
     "rwanda": "RW", "somalia": "SO", "south_sudan": "OD", "eritrea": "ER",
+    "burundi": "BY", "djibouti": "DJ", "comoros": "CN", "seychelles": "SE",
     # Центральная Африка
     "cameroon": "CM", "dr_congo": "CG", "congo": "CF", "chad": "CD",
-    "gabon": "GB", "angola": "AO",
+    "gabon": "GB", "angola": "AO", "central_african_republic": "CT",
+    "equatorial_guinea": "EK", "sao_tome_and_principe": "TP",
     # Южная Африка
     "south_africa": "SF", "zimbabwe": "ZI", "zambia": "ZA", "mozambique": "MZ",
     "botswana": "BC", "namibia": "WA", "madagascar": "MA", "malawi": "MI",
-    "mauritius": "MP",
+    "mauritius": "MP", "lesotho": "LT", "eswatini": "WZ",
 }
 
 # Человекочитаемое имя страны для промпта LLM (из ключа фида).

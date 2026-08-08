@@ -91,6 +91,10 @@
   // разметки, и после его прихода обязаны пересчитаться — иначе кнопка обещает
   // девять сюжетов, а показывает двести.
   var countTops = function () {};
+  // Подписи подтем по маске — для карточек хвоста ленты, которые рисует сам
+  // app.js. Подписи лежат на кнопках полосы (data-name); без полосы карточка
+  // остаётся без метки, а не без карточки.
+  var topNames = function () { return []; };
 
   // ── Атлас ─────────────────────────────────────────────────────────────
   // Панель ложится поверх страницы и ничего не двигает, поэтому и состояние
@@ -418,6 +422,17 @@
   if (tops && stories.length) {
     var tbtns = all('.tops__btn');
     var tReset = tops.querySelector('[data-tops-reset]');
+
+    // Последняя кнопка — «Прочее» (topics.mask ставит его последним битом), и
+    // на карточке оно не пишется: это не тема, а её отсутствие. В маске оно
+    // всегда стоит одно, так что резать больше нечего.
+    topNames = function (tp) {
+      var out = [];
+      for (var i = 0; tp && i < tbtns.length - 1 && out.length < 3; i++) {
+        if (tp & +tbtns[i].dataset.bit) out.push(tbtns[i].dataset.name);
+      }
+      return out;
+    };
 
     // tail — архивная часть ленты; пока листалка её не подтянула, счёт идёт по
     // той сотне, что лежит в разметке, и потом пересчитывается (см. ensure).
@@ -751,10 +766,17 @@
     if ([20, 50, 100].indexOf(size) < 0) size = 20;
     sizeSels.forEach(function (sel) { sel.value = size; });
 
+    // Панель «Отбор»: та самая, в которой стоят полоса дат и полоса тем. Их
+    // цифры считаются по ленте, а лента до подтягивания архива — сотня строк
+    // из разметки, поэтому пока корпус в пути, счётчики приглушены: сотня не
+    // должна выдавать себя за весь архив.
+    var toolsBox = word && word.closest ? word.closest('.tools') : null;
+
     var ensure = function () {
       if (tailAsked || total <= stories.length) return;
       tailAsked = true;
       eachPager(function (b) { b.classList.add('is-loading'); });
+      if (toolsBox) toolsBox.classList.add('is-stale');
       loadCorpus().then(function (j) {
         var scope = scopeOf(j);
         tail = [];
@@ -765,6 +787,7 @@
           tail.push({ s: s, hay: j.hay[i], day: j.d[s[2]], at: i });
         }
         eachPager(function (b) { b.classList.remove('is-loading'); });
+        if (toolsBox) toolsBox.classList.remove('is-stale');
         // теперь гистограмма считается по всей глубине, а не по сотне
         var per = {};
         stories.forEach(function (n) { per[n.dataset.day] = (per[n.dataset.day] || 0) + 1; });
@@ -812,6 +835,9 @@
       var tm = el('time', 'story__time', dm(t.day));
       tm.dateTime = t.day;
       meta.appendChild(tm);
+      topNames(s[9]).forEach(function (name) {
+        meta.appendChild(el('span', 'story__top', name));
+      });
       body.appendChild(meta);
 
       // Обзор — той же вёрсткой, что и в шаблоне (_story.html): предложения
@@ -1026,6 +1052,16 @@
     };
 
     if (word) word.addEventListener('input', apply);
+
+    // Архив тянется по первому же нажатию в ленте — но раскрытая панель это и
+    // есть нажатие: цифры дат и тем открывают затем, чтобы на них смотреть, а
+    // не чтобы сначала прочитать сотню, ткнуть наугад и увидеть другие числа.
+    // Открытие — самый ранний надёжный признак интереса; грузить пять
+    // мегабайт корпуса всем подряд ради панели, которую откроет не каждый,
+    // незачем.
+    if (toolsBox) toolsBox.addEventListener('toggle', function () {
+      if (toolsBox.open) ensure();
+    });
     eachPager(function (box) {
       Array.prototype.forEach.call(box.querySelectorAll('[data-pg]'), function (b) {
         b.addEventListener('click', function () { go(page + (+b.dataset.pg)); });
