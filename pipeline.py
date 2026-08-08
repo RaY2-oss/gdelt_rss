@@ -371,6 +371,17 @@ def _parse_iso(v):
     return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
 
 
+# Страница-заглушка антибота: щит отдаёт двухсотку с человеческим текстом, и
+# для trafilatura это обычная статья на 300–500 символов, то есть ровно выше
+# MIN_TEXT_LENGTH. Особенно бьёт по _rescue: браузер щит проходит не всегда, и
+# «спасённой» оказывалась сама заглушка.
+ANTIBOT = re.compile(
+    r"security service to protect|verifies you are not a bot|performing security "
+    r"verification|triggered the security solution|you have been blocked|"
+    r"just a moment|attention required|checking your browser|enable javascript "
+    r"and cookies|cloudflare ray id|are you a robot|проверка безопасности", re.I)
+
+
 def _extract(raw, url):
     """Байты страницы -> (текст, заголовок). Именно байты, не str: без charset
     в Content-Type requests угадывает ISO-8859-1 и калечит не-латинские
@@ -384,7 +395,11 @@ def _extract(raw, url):
     if not d:
         return None, None
     g = (lambda k: getattr(d, k, None)) if hasattr(d, "text") else d.get
-    return (g("text") or "").strip(), (g("title") or "").strip()
+    text, title = (g("text") or "").strip(), (g("title") or "").strip()
+    if ANTIBOT.search(title + " " + text[:1500]):
+        log.debug("антибот вместо статьи: %s", url)
+        return None, None
+    return text, title
 
 
 def fetch_and_extract(url):

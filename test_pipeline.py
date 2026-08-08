@@ -633,6 +633,27 @@ def test_browser_rescue_only_on_last_attempt():
     assert tries["http://r/fresh"] == 1, tries     # одна неудача — одна отметка
 
 
+def test_extract_drops_antibot_shield():
+    """Страница щита — не короткая: 300–500 символов человеческого текста, то
+    есть ровно выше MIN_TEXT_LENGTH, и без сторожа она уходит в статьи. Особенно
+    через _rescue: браузеру щит отвечает охотнее, чем скрипту (замер 08.08.2026
+    на сотне трудных адресов — 13 «спасённых» из 45 оказались вот этим)."""
+    shield = ('<html><head><title>Just a moment...</title></head><body><p>'
+              'Enable JavaScript and cookies to continue. This website is using '
+              'a security service to protect itself from online attacks and the '
+              'action you just performed triggered the security solution.'
+              '</p></body></html>').encode("utf-8")
+    assert pipeline._extract(shield, "http://x/a") == (None, None)
+
+    # Сторож смотрит на начало текста, а не на всю страницу: статья, где слово
+    # «cloudflare» встретилось по делу, остаться должна.
+    art = ('<html><head><title>Ускоритель в Аммане</title></head><body><article><p>'
+           + 'Центр SESAME запустил новую линию синхротронного излучения. ' * 10
+           + '</p></article></body></html>').encode("utf-8")
+    text, title = pipeline._extract(art, "http://x/b")
+    assert title == "Ускоритель в Аммане" and len(text) > 300, (title, text)
+
+
 def test_stamp_reads_time_from_markup():
     """Дата без времени — вся суточная лента с меткой 00:00, и сортировать её
     нечем. Время у страницы почти всегда есть в её же разметке; проверяем, что
