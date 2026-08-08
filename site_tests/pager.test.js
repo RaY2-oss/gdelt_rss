@@ -93,8 +93,14 @@ function goto(d, p) {
     assert.ok(tail[0].dataset.url, 'у строки хвоста нет адреса');
     assert.equal(tail[0].querySelector('.story__title a'), null, 'заголовок снова ссылка');
     assert.ok(tail[0].querySelector('.story__solo a').href, 'у строки хвоста нет выхода наружу');
-    assert.ok(tail[0].querySelector('.story__snippet').textContent.length > 20,
-      'у строки хвоста нет текста');
+    assert.ok(tail[0].querySelector('.over__line').textContent.length > 20,
+      'у строки хвоста нет обзора');
+    assert.ok(tail[0].querySelector('.over__src').textContent.length > 3,
+      'у обзора в хвосте нет подписи издания');
+    // Обзор обязан быть у КАЖДОЙ карточки хвоста, а не у первой: до этого
+    // пересказан был только первый экран, дальше шли одни заголовки.
+    assert.ok(tail.every((n) => n.querySelector('.over__line')),
+      'в хвосте есть сюжеты без обзора');
     assert.ok(tail[0].querySelector('.story__country'), 'на главной страна показана');
     assert.equal(+tail[0].querySelector('.story__no').textContent, (pages - 1) * 20 + 1);
     assert.equal(tailBox.dataset.turn, 'fwd');

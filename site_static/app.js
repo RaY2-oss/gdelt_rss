@@ -814,7 +814,19 @@
       meta.appendChild(tm);
       body.appendChild(meta);
 
-      if (s[7]) body.appendChild(el('p', 'story__snippet', s[7]));
+      // Обзор — той же вёрсткой, что и в шаблоне (_story.html): предложения
+      // взяты дословно у разных изданий, и подпись при каждом обязательна.
+      // Ссылки у строки нет — в корпусе лежат только имена изданий, а выход
+      // наружу у карточки один, ниже.
+      if (s[7] && s[7].length) {
+        var over = el('div', 'over');
+        s[7].forEach(function (o) {
+          var line = el('p', 'over__line', o[0] + ' ');
+          if (o[1]) line.appendChild(el('span', 'over__src', o[1]));
+          over.appendChild(line);
+        });
+        body.appendChild(over);
+      }
 
       var names = (s[6] || '').split(';').filter(Boolean).slice(0, 8);
       if (names.length) {
