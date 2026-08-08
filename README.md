@@ -164,6 +164,11 @@ venv/bin/python train_prefilter.py [--force]
 - `importance.py` — структурная важность: LexRank по эмбеддингам тел, охват
   по разным доменам, вес субъектов (самопроверка — `venv/bin/python
   importance.py`).
+- `topics.py` — подтемы сюжета (корзины лежат данными в `topics.json`).
+  Словарь размечает строгие попадания, на них учится one-vs-rest логистическая
+  регрессия по эмбеддингам, и она отвечает там, где слово не нашлось
+  (`refine`; самопроверка — `venv/bin/python topics.py`, кандидаты в словарь —
+  `--suggest`).
 - `embedder.py` — e5 через onnxruntime напрямую, без `sentence-transformers`
   и без torch (почему — см. «Известные проблемы»).
 - `translate.py` — первое плечо: перевод заголовка/текста на английский через

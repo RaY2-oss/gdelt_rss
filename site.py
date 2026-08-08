@@ -597,8 +597,6 @@ def stories(conn, rows, country, now):
         # авторским текстом, которым он не является.
         over = [{"text": s, "domain": by_url.get(_safe_url(u), imp.domain(u)),
                  "url": _safe_url(u)} for u, s in lines if s]
-        tlist = topics.of([c for c in cands if c],
-                          " ".join(o["text"] for o in over) or (x_ru or x_en or text or ""))
         dt = _pubdate(pdate, fetched)
         # Структурная важность приходит в [0,1] (importance.structural); шкала
         # 0-100 — только для показа, столбик и ступень тона считают по ней.
@@ -653,15 +651,18 @@ def stories(conn, rows, country, now):
             # имена, записанные прежними прогонами, и обстановку страницы
             # («whatsapp linkedin») надо отсеять на чтении.
             "entities": entities.split(ents)[:4],
-            # Подтемы сюжета. Заголовками идут ВСЕ издания кластера, а не один
-            # выбранный: двенадцать заголовков про одно событие — двенадцать
-            # попыток назвать его тему, и достаточно, чтобы слово «полупроводник»
+            # Сырьё для подтем; сами темы раздаются одной пачкой на всю сборку
+            # (topics.refine в build), потому что классификатор учится на всём
+            # корпусе сразу — одной стране учить его не на чем.
+            #
+            # Заголовками идут ВСЕ издания кластера, а не один выбранный:
+            # двенадцать заголовков про одно событие — двенадцать попыток
+            # назвать его тему, и достаточно, чтобы слово «полупроводник»
             # нашлось хотя бы у одного. Телом — обзор и подводка, то есть уже
             # отобранные предложения, а не сырая статья с её подвалом.
-            "topics": tlist,
-            # То же маской: в разметке ею фильтрует app.js, в search.json она
-            # едет вместо списка слагов (шесть тысяч строк — вчетверо легче).
-            "tp": topics.mask(tlist),
+            "_tsrc": ([c for c in cands if c],
+                      " ".join(o["text"] for o in over) or (x_ru or x_en or text or ""),
+                      _blend(members[0][6], members[0][10])),
             "country": country,
             "country_ru": RU_COUNTRY.get(country, settings.country_display(country)),
             # Эмбеддинг тела головной статьи — только чтобы посчитать похожие
@@ -711,6 +712,22 @@ def popular_names(items, limit=POPULAR_TOP):
         if ru:
             out.append([ru, name, n])
     return out
+
+
+def _blend(title_blob, body_blob):
+    """Вектор сюжета для подтем: заголовок и тело поровну, единичной длины.
+
+    Не body_emb: там тело, а заголовок — только запасной вариант. Подтему же
+    называют оба, и порознь каждый слабее смеси (замер 08.08.2026: макро-F1
+    0.71 у смеси против 0.66 по телу и 0.68 по заголовку).
+    """
+    import numpy as np
+    parts = [np.frombuffer(b, np.float32) for b in (title_blob, body_blob) if b]
+    if not parts:
+        return None
+    v = np.mean(parts, axis=0)
+    n = float(np.linalg.norm(v))
+    return v / n if n else None
 
 
 def akin(everything, top=AKIN_TOP, floor=AKIN_FLOOR):
@@ -927,6 +944,18 @@ def build(out_dir=OUT_DIR):
         # не нужен — url это PRIMARY KEY, статья лежит ровно под одной страной.
         everything = [s for items in by_country.values() for s in items]
         everything.sort(key=lambda s: (s["score"], s["outlets"]), reverse=True)
+
+        # Подтемы — одной пачкой на всю сборку: словарь размечает, а на его
+        # строгих попаданиях учится классификатор по векторам и отвечает там,
+        # где слова не нашлось (см. topics.refine). По стране это не считается —
+        # шестьсот сюжетов одной страны для обучения мало, и корзины у Индии и
+        # Кении разъехались бы порогами, а не темами.
+        for item, tlist in zip(everything,
+                               topics.refine([s.pop("_tsrc") for s in everything])):
+            item["topics"] = tlist
+            # То же маской: в разметке ею фильтрует app.js, в search.json она
+            # едет вместо списка слагов (шесть тысяч строк — вчетверо легче).
+            item["tp"] = topics.mask(tlist)
 
         # Похожие сюжеты считаются один раз на всю сборку и живут в search.json
         # индексами; сюжету остаётся только их число — по нему шаблон решает,

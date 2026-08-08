@@ -53,7 +53,24 @@ const settle = async () => { for (let i = 0; i < 6; i++) await wait(); };
   // что тему никто не проставил, и все проверки ниже прошли бы впустую.
   const tagged = j.s.filter((s) => s[9]).length;
   assert.ok(tagged > 0, 'ни одного сюжета с темой в корпусе');
-  console.log('  сюжетов с темой: ' + tagged + ' из ' + j.s.length);
+
+  // «Прочее» — последний бит маски (см. topics.mask). Его доля стережёт
+  // классификатор: без sklearn или без обучающей выборки topics.refine молча
+  // откатывается на один строгий заход словаря, сборка проходит, а «Прочее»
+  // прыгает с одной восьмой ленты до четверти. Потолок взят между замерами:
+  // 11.5 % со слоем и не меньше 23 % без него (08.08.2026).
+  const nt = JSON.parse(fs.readFileSync('/opt/gdelt_rss/topics.json', 'utf8')).length;
+  const other = 1 << (nt - 1);
+  const dark = j.s.filter((s) => s[9] === other).length;
+  assert.ok(dark / j.s.length < 0.18,
+    'сюжетов без темы четверть — похоже, классификатор не отработал: ' + dark);
+  // Мультиметка: тем у сюжета бывает несколько, и если это перестало быть
+  // правдой, кто-то по дороге срезал список до первой.
+  const many = j.s.filter((s) => s[9] && (s[9] & (s[9] - 1))).length;
+  assert.ok(many / j.s.length > 0.1, 'у сюжетов ровно по одной теме: ' + many);
+  console.log('  сюжетов с темой: ' + tagged + ' из ' + j.s.length +
+    ', «Прочее» ' + (100 * dark / j.s.length).toFixed(1) + ' %' +
+    ', с несколькими темами ' + (100 * many / j.s.length).toFixed(0) + ' %');
 
   {
     const { d } = boot('index.html');
