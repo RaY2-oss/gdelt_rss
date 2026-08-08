@@ -554,7 +554,7 @@ def stories(conn, rows, country, now):
 
     # Что соседом не закрылось — переводим сами, в общий с фидом кэш. ranked уже
     # по убыванию важности, так что бюджет тратится сверху вниз.
-    todo = [groups[lab][0] for lab, _w in ranked
+    todo = [groups[lab][0] for lab, *_ in ranked
             if not _readable(groups[lab][0])][:TRANSLATE_BUDGET] \
         if time.monotonic() < _translate_until else []
     en = translate.translate_missing(
@@ -563,11 +563,11 @@ def stories(conn, rows, country, now):
     # Обзоры сюжетов — пачкой на страну: по строке из базы витрина бы не
     # собралась, сюжетов шесть тысяч. Ключ — набор адресов кластера, см.
     # overview: он переживает смену меток кластеризации между прогонами.
-    keys = [overview.key_of([m[0] for m in groups[lab]]) for lab, _w in ranked]
+    keys = [overview.key_of([m[0] for m in groups[lab]]) for lab, *_ in ranked]
     cached = overview.load(conn, keys)
 
     out = []
-    for key, (lab, weight) in zip(keys, ranked):
+    for key, (lab, weight, age) in zip(keys, ranked):
         members = groups[lab]
         (url, title, text, pdate, fetched, _llm, _e, lang, t_en, x_en, _be, ents,
          t_ru, x_ru) = members[0]
@@ -612,10 +612,22 @@ def stories(conn, rows, country, now):
         # авторским текстом, которым он не является.
         over = [{"text": s, "domain": by_url.get(_safe_url(u), imp.domain(u)),
                  "url": _safe_url(u)} for u, s in lines if s]
-        dt = _pubdate(pdate, fetched)
+        # Дата сюжета — дата САМОЙ РАННЕЙ его статьи, а не представителя (тот
+        # выбран по читаемости и свежести). Даты события у нас нет и взять её
+        # неоткуда, но «когда о сюжете написали впервые» — ближайшее к ней, что
+        # даёт сам корпус: первое издание пишет по факту события, а не через
+        # неделю. Перепечатка на третий день больше не сдвигает сюжет в
+        # сегодняшний день полосы дат. Место в ленте от этого не зависит:
+        # порядок считает возраст по САМОЙ СВЕЖЕЙ статье (feeds.rank).
+        dts = [_pubdate(m[3], m[4]) for m in members]
+        dt, last = min(dts), max(dts)
         # Структурная важность приходит в [0,1] (importance.structural); шкала
         # 0-100 — только для показа, столбик и ступень тона считают по ней.
+        # Затухания в ней больше нет: столбик меряет сюжет, а убыль от времени
+        # показана отдельно, выцветанием (fade) — см. --age в style.css.
         score = round(weight * 100)
+        aged = imp.fade(age, settings.IMPORTANCE_HALF_LIFE_DAYS,
+                        settings.IMPORTANCE_AGE_FLOOR)
         head = sources[0]["domain"] if sources else ""
         clean = (cands[pick] if pick is not None else "") or url
         # Издание, чей заголовок выиграл отбор, помечается в списке источников:
@@ -650,11 +662,25 @@ def stories(conn, rows, country, now):
             "translated": bool(t_ru or t_en),
             "score": score,
             "tier": _tier(score),
+            # Порядок ленты — важность × свежесть; наружу едет отдельно от
+            # score, потому что общая лента и лента региона пересобираются из
+            # готовых сюжетов и сортировать им больше нечем.
+            "rank": weight * imp.freshness(age, settings.IMPORTANCE_HALF_LIFE_DAYS,
+                                           settings.IMPORTANCE_AGE_FLOOR),
+            # Доля веса, съеденная временем: ею строка выцветает. Три знака —
+            # значение уходит в атрибут style=, и дальше третьего цвет не
+            # отличить, а разметка растёт на каждой из шести тысяч строк.
+            "fade": round(aged, 3),
             "iso": dt.isoformat(),
             # день публикации в UTC — ключ, по которому строка попадает под
             # отметку в полосе дат (.days). Тот же формат, что у ключей days().
             "day": dt.strftime("%Y-%m-%d"),
             "ago": _ago(dt, now),
+            # Сюжет, о котором пишут не первый день: подпись объясняет, почему
+            # строка с позавчерашней датой стоит высоко. Порог в сутки, а не
+            # любая разница, — у большинства сюжетов первая и последняя статьи
+            # в одних сутках, и пометка была бы шумом на каждой строке.
+            "last_ago": _ago(last, now) if (last - dt).days >= 1 else "",
             "domain": sources[0]["domain"] if sources else "",
             # Все издания кластера, а не первые восемь: в строке выходных данных
             # стоит их полное число («24 издания»), и «Ещё 7 источников» под ним
@@ -824,9 +850,13 @@ def search_index(everything, regions, near=None):
         # (topics.mask), а не списком слагов: полоса подтем фильтрует и
         # архивную часть ленты тоже, иначе «только про ИИ» резало бы первую
         # сотню в разметке и пропускало весь хвост из этого же файла.
+        # Выцветание (последним полем) едет вместе со всем остальным, а не
+        # считается в браузере по дате: дата в корпусе — день ПЕРВОЙ статьи
+        # сюжета, а выцветание идёт от возраста последней, и посчитанное на
+        # месте разошлось бы с первой сотней строк, лежащей в разметке.
         "s": [[s["title"], ci[s["country"]], di[s["day"]], s["score"],
                s["url"], s["domain"], ";".join(s["entities"]),
-               tail_over(s), s["outlets"], s["tp"]]
+               tail_over(s), s["outlets"], s["tp"], s["fade"]]
               for s in everything],
         # Похожие сюжеты — индексы в том же массиве s. Лежат здесь, а не в
         # разметке: показываются по требованию, и корпус к этому моменту уже
@@ -958,7 +988,7 @@ def build(out_dir=OUT_DIR):
         # Общая лента: сюжеты всех стран за то же окно. Кросс-страновой дедуп
         # не нужен — url это PRIMARY KEY, статья лежит ровно под одной страной.
         everything = [s for items in by_country.values() for s in items]
-        everything.sort(key=lambda s: (s["score"], s["outlets"]), reverse=True)
+        everything.sort(key=lambda s: (s["rank"], s["outlets"]), reverse=True)
 
         # Подтемы — одной пачкой на всю сборку: словарь размечает, а на его
         # строгих попаданиях учится классификатор по векторам и отвечает там,
@@ -1024,7 +1054,7 @@ def build(out_dir=OUT_DIR):
     for slug, name, countries in REGIONS:
         members = [c for c in countries if c in by_country]
         pool = [s for c in members for s in by_country[c]]
-        pool.sort(key=lambda s: (s["score"], s["outlets"]), reverse=True)
+        pool.sort(key=lambda s: (s["rank"], s["outlets"]), reverse=True)
         regions.append({
             # ключ НЕ "items": в шаблоне region.items резолвится в метод
             # словаря dict.items, а не в значение

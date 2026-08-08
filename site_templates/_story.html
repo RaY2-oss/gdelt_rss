@@ -131,7 +131,7 @@
    Адрес головной статьи всё же нужен — им закладки и похожие сюжеты опознают
    строку, — и живёт теперь в data-url, а не в href. #}
 {% macro story(s, show_country=True, i=0, no=1, eyebrow=None) %}
-<article class="story" style="--w: {{ s.score }}; --i: {{ i if i < 20 else 20 }}" data-tier="{{ s.tier }}"
+<article class="story" style="--w: {{ s.score }}; --age: {{ s.fade }}; --i: {{ i if i < 20 else 20 }}" data-tier="{{ s.tier }}"
          data-score="{{ s.score }}" data-day="{{ s.day }}" data-url="{{ s.url }}"
          data-tp="{{ s.tp }}"
          data-find="{{ s.title|lower }} {{ s.country_ru|lower }} {{ s.domain }} {% for e in s.entities %}{{ ru_name(e)|lower }} {% endfor %}">
@@ -153,7 +153,13 @@
          список под ней назывался «Ещё N» и главное не включал — один и тот же
          сюжет считался дважды. Все издания теперь в одном блоке (sources). #}
       {% if s.outlets > 1 %}<span class="story__outlets">{{ s.outlets }} {{ s.outlets_word }}</span>{% endif %}
+      {# Дата — когда о сюжете написали впервые, а не когда его перепечатали
+         последний раз (см. stories в site.py). Если сюжет живёт не первый
+         день, рядом стоит, когда к нему приходили в последний раз: иначе
+         строка с позавчерашней датой на верху сегодняшней ленты выглядит
+         ошибкой сортировки. #}
       <time class="story__time" datetime="{{ s.iso }}">{{ s.ago }}</time>
+      {% if s.last_ago %}<span class="story__upd">обновлено {{ s.last_ago }}</span>{% endif %}
       {# язык у части статей не определился — тогда просто «перевод», без «пер. с » в никуда #}
       {% if s.translated %}<span class="story__tag">{{ 'пер. с ' ~ s.lang if s.lang else 'перевод' }}</span>
       {% elif s.lang %}<span class="story__tag story__tag--plain">{{ s.lang }}</span>{% endif %}
@@ -181,6 +187,11 @@
   <span class="axis__label">Важность сюжета</span>
   <span class="axis__ramp" aria-hidden="true"></span>
   <span class="axis__nums" aria-hidden="true"><b>0</b><b>25</b><b>50</b><b>75</b><b>100</b></span>
+  {# Вторая шкала, поперёк первой: длина строки — важность, цвет — возраст.
+     Без подписи выцветшая строка читается как сбой отрисовки, а не как
+     «сюжет не сегодняшний». #}
+  <span class="axis__note">длина — важность, выцветание — возраст: старый сюжет
+    опускается в ленте, но своей величины не теряет</span>
 </div>
 {% endmacro %}
 
@@ -195,7 +206,7 @@
 {% macro dates(days) %}
 <div class="days" data-days>
   <div class="days__top">
-    <span class="days__label">Даты публикации</span>
+    <span class="days__label">Даты сюжетов</span>
     <span class="days__hint">клик — день, протяжка — период</span>
     <button class="days__reset" type="button" data-days-reset hidden>весь период</button>
   </div>

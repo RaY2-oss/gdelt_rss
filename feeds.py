@@ -154,12 +154,16 @@ def cluster_rows(rows):
 
 
 def rank(groups):
-    """{label: [строки]} -> [(label, важность)] по убыванию.
+    """{label: [строки]} -> [(label, важность, возраст в сутках)] по убыванию.
 
     Важность структурная (importance.structural): LexRank по эмбеддингам тел +
-    охват по доменам + вес субъектов, всё это с затуханием по возрасту.
-    Оценкой LLM здесь не ранжируют — она двоичная, «по теме или нет», и порядка
-    не задаёт вовсе.
+    охват по доменам + вес субъектов. Оценкой LLM здесь не ранжируют — она
+    двоичная, «по теме или нет», и порядка не задаёт вовсе.
+
+    Важность в кортеже — БЕЗ затухания. Порядок задаёт произведение важности на
+    свежесть, а сама важность едет наружу как есть: витрина меряет столбиком
+    сюжет, а не его срок годности, и старая крупная новость должна опускаться
+    в ленте, не теряя при этом своей длины (см. importance.fade).
 
     Возраст сюжета — возраст его САМОЙ СВЕЖЕЙ статьи: сюжет, о котором пишут
     сегодня, не старый, сколько бы дней назад он ни начался.
@@ -176,8 +180,12 @@ def rank(groups):
         [imp.body_emb(r[10], r[6]) for r in reps],
         [[r[0] for r in groups[lab]] for lab in labels],
         [[r[11] or "" for r in groups[lab]] for lab in labels],
-        ent_df, ages)
-    return sorted(zip(labels, scores), key=lambda kv: kv[1], reverse=True)
+        ent_df)
+    return sorted(zip(labels, scores, ages),
+                  key=lambda t: t[1] * imp.freshness(
+                      t[2], settings.IMPORTANCE_HALF_LIFE_DAYS,
+                      settings.IMPORTANCE_AGE_FLOOR),
+                  reverse=True)
 
 
 def _top_items(rows):
@@ -189,7 +197,7 @@ def _top_items(rows):
     # Представитель — самый важный по оценке… которой больше нет. Берём самый
     # свежий: внутри кластера это один и тот же сюжет (косинус тел >=
     # DEDUP_BODY_COSINE).
-    return [max(groups[lab], key=lambda r: r[4] or "") for lab, _s in rank(groups)]
+    return [max(groups[lab], key=lambda r: r[4] or "") for lab, *_ in rank(groups)]
 
 
 def write_feed(fg, path):

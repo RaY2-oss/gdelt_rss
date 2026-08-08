@@ -27,10 +27,20 @@
 
     3. Политический вес субъектов (entities.py) — как и раньше.
 
-Свёртка трёх факторов домножается на свежесть (`freshness`): витрина держит
-архив за две недели, и без затухания позавчерашний сюжет с сорока изданиями
-стоял бы над сегодняшним вечно. Затухание половинное и с полом — крупная
-старая новость опускается, но не исчезает.
+Важность и актуальность здесь РАЗВЕДЕНЫ. `structural` считает только важность:
+сколько сюжет весит сам по себе, независимо от того, когда он случился.
+Свежесть живёт отдельно (`freshness`) и в свёртку не входит — её домножает
+тот, кто выстраивает ленту (feeds.rank). Раньше это делалось прямо здесь, и
+величина получалась одна на два разных вопроса: витрина рисовала столбиком
+«важность», а в столбике сидел ещё и срок годности, отчего вчерашний крупный
+сюжет выглядел мельче, чем был.
+
+Порядок ленты по-прежнему важность × свежесть: архив держится две недели, и
+без затухания позавчерашний сюжет с сорока изданиями стоял бы над сегодняшним
+вечно. Затухание половинное и с полом — крупная старая новость опускается, но
+не исчезает. Ту же убыль витрина показывает цветом (`fade`): столбик остаётся
+во всю длину, но выцветает ровно настолько, насколько время съело его место в
+ленте.
 
 Веса факторов — в settings.IMPORTANCE_W_*; выставить любой в 0 значит
 выключить фактор, не трогая код. Затухание снимается
@@ -160,6 +170,20 @@ def freshness(age_days, half_life, floor):
     return floor + (1.0 - floor) * 0.5 ** (max(0.0, float(age_days)) / half_life)
 
 
+def fade(age_days, half_life, floor):
+    """Сколько веса уже съело время, в [0,1] — свежесть, вывернутая наизнанку.
+
+    Витрина красит этим выцветание строки. Отдельной кривой у цвета нет и не
+    должно быть: цвет обязан объяснять порядок ленты, а порядок задаёт та же
+    freshness. 0 — сюжет сегодняшний, 1 — часы отняли всё, что могли (ниже
+    пола затухание не идёт, поэтому и выцветание доходит до конца, а не
+    останавливается на floor).
+    """
+    if floor >= 1.0:
+        return 0.0
+    return min(1.0, (1.0 - freshness(age_days, half_life, floor)) / (1.0 - floor))
+
+
 def body_emb(body_blob, title_blob):
     """Эмбеддинг ТЕЛА статьи; пока не досчитан — откат на заголовочный.
 
@@ -170,8 +194,11 @@ def body_emb(body_blob, title_blob):
     return np.frombuffer(body_blob or title_blob, np.float32)
 
 
-def structural(body_embs, urls, entity_cells, ent_df, ages=None):
+def structural(body_embs, urls, entity_cells, ent_df):
     """Важность сюжетов ОДНОЙ страны в [0,1] — свёртка трёх факторов выше.
+
+    Без затухания по возрасту: это вес сюжета, а не его место в ленте.
+    Свежесть домножает feeds.rank (см. шапку модуля).
 
     Единственная точка, где считается важность: её зовут и дайджест, и фид
     «все статьи», и витрина. Раньше формула жила только в дайджесте, а фид с
@@ -183,7 +210,6 @@ def structural(body_embs, urls, entity_cells, ent_df, ages=None):
     entity_cells — entity_cells[i]: ячейки entities всех статей сюжета i
     ent_df       — док-частота субъектов по окну этой страны (entities.document_freq);
                    пустая/незначимая -> фактор субъектов выключается сам
-    ages         — ages[i]: возраст сюжета в сутках (None -> без затухания)
 
     Веса берутся из settings.IMPORTANCE_W_*, любой в 0 выключает фактор.
     """
@@ -216,16 +242,8 @@ def structural(body_embs, urls, entity_cells, ent_df, ages=None):
     else:
         ent = np.zeros(n, dtype=np.float64)
 
-    out = blend(lex, cov, ent, settings.IMPORTANCE_W_LEXRANK,
-                settings.IMPORTANCE_W_COVERAGE, settings.IMPORTANCE_W_ENTITY)
-    if ages is None:
-        return out
-    # Домножением, а не четвёртым слагаемым: свежесть — не заслуга сюжета, а
-    # срок годности того, что у него уже есть. Слагаемым она поднимала бы
-    # сегодняшнюю пустую заметку над вчерашней настоящей новостью.
-    return out * np.array([freshness(a, settings.IMPORTANCE_HALF_LIFE_DAYS,
-                                     settings.IMPORTANCE_AGE_FLOOR) for a in ages],
-                          dtype=np.float64)
+    return blend(lex, cov, ent, settings.IMPORTANCE_W_LEXRANK,
+                 settings.IMPORTANCE_W_COVERAGE, settings.IMPORTANCE_W_ENTITY)
 
 
 def _selfcheck():
@@ -276,6 +294,15 @@ def _selfcheck():
     # сюжет остаётся выше свежей мелочи.
     big_old, small_new = 0.90 * freshness(14, hl, floor), 0.20 * freshness(0, hl, floor)
     assert big_old > small_new, (big_old, small_new)
+
+    # Выцветание — та же кривая, прочитанная наизнанку: цвет строки обязан
+    # объяснять её место в ленте, а не жить своей жизнью.
+    assert fade(0, hl, floor) == 0.0
+    assert abs(fade(hl, hl, floor) - 0.5) < 1e-12
+    assert fade(3, 0, floor) == 0.0             # затухания нет — и выцветания нет
+    f1, f2 = fade(2, hl, floor), fade(9, hl, floor)
+    assert 0.0 < f1 < f2 < 1.0, (f1, f2)
+    assert fade(999, hl, floor) == 1.0          # доходит до конца, а не до floor
     print("importance: ok")
 
 
