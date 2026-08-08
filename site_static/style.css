@@ -131,7 +131,7 @@
 :root[data-theme='dark'] { color-scheme: dark; }
 
 /* Ступень шкалы → цвет. Ставится на .story / .atlas__cell / .chips__item /
-   .rmap__land. Два ряда: --tier красит линии и меры, --fill — фон под текстом. */
+   .atlas__cell. Два ряда: --tier красит линии и меры, --fill — фон под текстом. */
 [data-tier='0'] { --tier: var(--sig-0); --fill: var(--fill-0); }
 [data-tier='1'] { --tier: var(--sig-1); --fill: var(--fill-1); }
 [data-tier='2'] { --tier: var(--sig-2); --fill: var(--fill-2); }
@@ -671,214 +671,38 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
    отодвигают новость на третий разворот, из-за чего атлас отсюда и уехал. */
 .tools--atlas { margin-block: 1.5rem 0; }
 
-/* Карта охвата. Границы стран — готовые пути SVG (см. make_borders.py): один
-   раз пережёванный Natural Earth 110m лежит в разметке страницы, а не
-   собирается в браузере библиотекой карт. Сетка приходит оттуда же путями:
-   проекция равновеликая, у неё меридианы кривые, и полосками фона такую сетку
-   не нарисовать. */
-.rmap {
-  --grat: color-mix(in oklab, var(--ink) 8%, transparent);
-  position: relative;
-  margin-top: 0.75rem;
-  padding-bottom: 4.75rem;
-}
+/* Атлас на главной. Здесь стояла карта Азии и Африки в Equal Earth — 73 КБ
+   готовых путей SVG в разметке каждой главной и поле в полтора экрана
+   высотой. Сетка регионов отвечает на тот же вопрос («где сегодня громко»)
+   именами, которые читаются все сразу, и не весит ничего.
 
-.rmap__field {
-  position: relative;
-  /* пропорция кадра приходит из data/borders.json вместе с геометрией: если
-     рамку карты когда-нибудь подвинут, картинка не должна поехать */
-  aspect-ratio: var(--mw, 3) / var(--mh, 2);
-  background-color: var(--panel-sunk);
-  border: 1px solid var(--rule);
-  border-radius: var(--r);
+   Колонки, а не грид: регионы разной длины, и хвост должен просто перетекать
+   в следующую колонку, а не оставлять под коротким регионом дырку в строке
+   грида. */
+/* 8,5rem — не на глаз: это самая узкая колонка, на которой ни одно из 89 имён
+   не обрезается (замерено scrollWidth по всем ячейкам). Колонок от неё
+   выходит шесть на развороте и четыре на телефоне, а вся сетка — 580 пикселей
+   в высоту против 1070 при колонке в 15rem и против полутора экранов, которые
+   занимала карта. */
+.tools--atlas .atlas__grid {
+  columns: 5 8.5rem;
+  column-gap: 1rem;
 }
-.rmap__svg { display: block; width: 100%; height: 100%; }
+.tools--atlas .atlas__region { break-inside: avoid; margin-bottom: 0.875rem; }
+/* В панели ширина 27rem и имена идут в две колонки; здесь колонка узкая, и
+   вторая обрезала бы «Демократическая Республика Конго» на трети имени. */
+.tools--atlas .atlas__list { columns: 1; }
+.tools--atlas .atlas__cell { margin-top: 1px; }
+.tools--atlas .atlas__cell a {
+  padding: 0.125rem 0.375rem;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+}
+.tools--atlas .atlas__note { margin-top: 0; }
 
-/* Сетка. Проведена той же проекцией, что и берега, поэтому меридианы сходятся
-   к полюсам, а не стоят частоколом. Лежит под сушей: море показывает сетку,
-   земля её накрывает. */
-.rmap__grid {
-  fill: none;
-  stroke: var(--grat);
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
-}
-
-/* Соседи по кадру — только контур: они не открываются и не должны спорить за
-   внимание со странами охвата. Заливка нарочно бледнее, чем нижняя ступень
-   шкалы: раньше Европа с Австралией весили на кадре столько же, сколько тихая
-   страна охвата, и глаз не отличал «здесь пусто» от «сюда мы не смотрим». */
-.rmap__rest {
-  fill: color-mix(in oklab, var(--ink) 3.5%, transparent);
-  stroke: var(--grat);
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
-}
-
-/* Страна охвата. Заливка — важность её верхнего сюжета, той же шкалой, что и
-   лента: карта и лента красятся из одного набора ступеней.
-
-   Ступень идёт в полную силу, без разбавления прозрачностью. Разбавленная на
-   58 % шкала садилась на цвет поля и съезжалась: пять ступеней превращались в
-   три, а половина Африки — в одно пятно. Прозрачность экономила на обводке,
-   которой хватило и без неё. */
-.rmap__land path, .rmap__land circle {
-  fill: var(--tier);
-  stroke: var(--panel-sunk);
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
-  transition: fill 0.16s;
-}
-.rmap__land { cursor: pointer; }
-/* Наведение больше не может добавить цвета — он весь уже налит, — поэтому
-   держится обводкой. Она же работает и на точечных микрогосударствах. */
-.rmap__land:hover path, .rmap__land:hover circle,
-.rmap__land:focus-visible path, .rmap__land:focus-visible circle {
-  stroke: var(--ink);
-  stroke-width: 2.5;
-}
-.rmap__land:focus-visible { outline: none; }
-
-/* Имя страны прямо на фигуре. Карта без подписей читается только наведением,
-   то есть с телефона не читается вовсе.
-
-   Кегль задан в пикселях экрана, а не кадра: при приближении карты подписи
-   остаются прежнего размера, страна растёт, и внутрь помещаются имена, которые
-   раньше не влезали (см. app.js). Что и во сколько раз влезает, посчитано на
-   сборке — site.py, data-fit.
-
-   Цвет не зависит от темы, хотя шкала в темах развёрнута: --ink читается на
-   нижних ступенях в обеих (на бумаге они светлые, на экране тёмные), --panel —
-   на верхних, тоже в обеих. Обводка того же ряда даёт ореол, поэтому имя не
-   тонет на границе двух заливок. */
-.rmap__lab {
-  fill: var(--ink);
-  stroke: var(--panel);
-  /* ореол привязан к кеглю, а не задан в единицах кадра: единицы кадра растут
-     вместе с приближением, и на пятикратном ореол съедал сами буквы */
-  stroke-width: calc(var(--lab, 16px) / 5);
-  paint-order: stroke;
-  font: 700 var(--lab, 16px)/1 var(--font-display);
-  letter-spacing: -0.01em;
-  text-anchor: middle;
-  dominant-baseline: central;
-  pointer-events: none;
-}
-.rmap__lab[data-tier='2'], .rmap__lab[data-tier='3'], .rmap__lab[data-tier='4'] {
-  fill: var(--panel);
-  stroke: var(--ink);
-}
-.rmap__lab[hidden] { display: none; }
-
-/* ── Шапка карты: легенда и приближение ───────────────────────────────── */
-.rmap__head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem 1rem;
-  margin-bottom: 0.5rem;
-}
-.rmap__key {
-  display: flex;
-  align-items: center;
-  gap: 0.4375rem;
-  margin: 0;
-  font: 400 0.6875rem/1 var(--font-data);
-  color: var(--ink-3);
-}
-.rmap__key-cap { margin-inline-end: 0.125rem; }
-.rmap__key-end { font-variant-numeric: tabular-nums; }
-/* Ступени стоят встык, без зазоров: шкала последовательная, и разрывы между
-   плитками читались бы как разрыв в величине. */
-.rmap__key-bar { display: flex; border: 1px solid var(--rule); border-radius: 2px; }
-.rmap__key-bar i { width: 1.5rem; height: 0.5rem; background: var(--tier); }
-
-.rmap__zoom {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  margin: 0;
-  font: 400 0.6875rem/1 var(--font-data);
-  color: var(--ink-3);
-}
-.rmap__zoom button {
-  min-width: 1.75rem;
-  padding: 0.25rem 0.4375rem;
-  font: inherit;
-  color: var(--ink-2);
-  background: var(--panel);
-  border: 1px solid var(--rule);
-  border-radius: var(--r);
-  cursor: pointer;
-}
-.rmap__zoom button:hover { border-color: var(--rule-strong); color: var(--ink); }
-.rmap__zoom button[disabled] { opacity: 0.4; cursor: default; }
-.rmap__zoom output {
-  min-width: 2.25rem;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Приближённая карта тянется мышью, и курсор об этом говорит; ссылки под ним
-   при этом продолжают работать — тянем только при зажатой кнопке.
-
-   touch-action снимается только у приближённой: на целом кадре палец по карте
-   должен листать страницу, как по любому другому месту, и отбирать у него это
-   ради жеста, который на целом кадре всё равно ничего не двигает, — ловушка.
-   У приближённой палец водит карту, а выход из неё в двух сантиметрах —
-   кнопка «весь кадр». */
-.rmap__field[data-zoomed] { cursor: grab; touch-action: none; }
-.rmap__field[data-drag] { cursor: grabbing; }
-
-/* Показание. Стоит под полем на фиксированном месте: всплывающая подсказка у
-   края карты уезжала за поле, а под курсором закрывала соседние страны.
-   Содержимое подставляет app.js — восемьдесят девять копий строки в разметке
-   ради обхода без скрипта того не стоили. */
-.rmap__read, .rmap__hint {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: calc(100% + 0.625rem);
-  margin: 0;
-  padding: 0.5rem 0.75rem;
-  min-height: 3.75rem;
-  background: var(--panel);
-  border: 1px solid var(--rule);
-  border-radius: var(--r);
-}
-.rmap__read {
-  display: grid;
-  gap: 0.125rem;
-  z-index: 1; /* показание лежит поверх подсказки: они меняются растворением */
-  border-inline-start: 2px solid var(--tier);
-}
-
-.rmap__cty { font: 700 0.9375rem/1.2 var(--font-display); letter-spacing: -0.02em; }
-.rmap__num {
-  font: 400 0.6875rem/1.2 var(--font-data);
-  font-variant-numeric: tabular-nums;
-  color: var(--ink-3);
-}
-.rmap__ttl {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  font-size: 0.8125rem;
-  line-height: 1.35;
-  color: var(--ink-2);
-}
-
-/* Подсказка занимает то же место и уступает его показанию. */
-.rmap__hint {
-  font: 400 0.75rem/1.45 var(--font-data);
-  color: var(--ink-3);
-}
-@media (max-width: 34rem) {
-  .rmap { padding-bottom: 5.75rem; }
-  .rmap__read, .rmap__hint { min-height: 4.75rem; }
-}
+/* Проявление при прокрутке — по региону, а не по ячейке: восемьдесят девять
+   отдельно всплывающих плашек читаются как рябь. */
+.atlas__region { --d: 0ms; }
 
 /* ── Заголовок ленты, ось, даты, фильтр ───────────────────────────────── */
 .board { padding-block: clamp(1.75rem, 4vw, 3rem); }
@@ -2285,7 +2109,7 @@ body[data-region='southern_africa'] {
       animation-timeline: view();
       animation-range: entry 0% entry 38%;
     }
-    .rmap, .foot__row {
+    .atlas__region, .foot__row {
       animation: rise linear backwards;
       animation-timeline: view();
       animation-range: entry 0% entry 55%;
@@ -2333,7 +2157,7 @@ body[data-region='southern_africa'] {
   html.no-tl .story,
   html.no-tl .chips__item,
   html.no-tl .who__list li,
-  html.no-tl .rmap {
+  html.no-tl .atlas__region {
     opacity: 0;
     transform: translate(0.75rem, 2rem);
     transition: opacity 0.5s ease, transform 0.55s cubic-bezier(0.16, 0.84, 0.28, 1);
@@ -2350,14 +2174,6 @@ body[data-region='southern_africa'] {
   }
   .page__head { animation-delay: 0.05s; }
   .chips, .who, .tools { animation-delay: 0.11s; }
-
-  /* Страны проступают на карте волной от шумных к тихим — тем же порядком, в
-     котором их выдал сборщик. Только прозрачность: transform у фигуры внутри
-     SVG считается от начала координат карты, и страна улетела бы в угол. */
-  .rmap__land {
-    animation: ink 0.45s ease backwards;
-    animation-delay: calc(var(--i, 0) * 6ms);
-  }
 
   /* Раскрытие <details> — тоже движение, а не подмена кадра. interpolate-size
      нужен, чтобы высота ехала от нуля к auto; где его нет (все, кроме
@@ -2418,14 +2234,6 @@ body[data-region='southern_africa'] {
       transform: translateY(-0.375rem);
     }
   }
-
-  /* Показание карты и подсказка лежат друг на друге и меняются растворением:
-     на быстром обходе карты подмена кадра мигала. */
-  .rmap__read, .rmap__hint {
-    transition: opacity 0.16s ease, display 0.16s allow-discrete;
-  }
-  .rmap__read[hidden], .rmap__hint[hidden] { opacity: 0; }
-  @starting-style { .rmap__read:not([hidden]) { opacity: 0; } }
 
   /* Слои поверх страницы: затемнение проявляется, панель поиска въезжает
      сверху — и тем же ходом уходят. Раньше открытие было плавным, а закрытие
@@ -2744,61 +2552,6 @@ html.is-theming::view-transition-new(root) {
   100% { transform: translateX(100%); opacity: 0; }
 }
 
-/* ── Рассвет над картой ───────────────────────────────────────────────── */
-/* Вместо кругового луча — терминатор: наклонная полоса света идёт с запада на
-   восток, и страна проступает ровно тогда, когда до неё доходит утро.
-   Задержку app.js берёт из положения страны по долготе (--px, доля ширины
-   кадра), так что порядок задаёт география, а не список.
-   Идёт один раз — при раскрытии атласа или при появлении карты в кадре: свет,
-   который ходит по кругу непрерывно, через минуту читается как индикатор
-   загрузки.
-
-   Прежний вариант (луч по кругу) отсюда убран по двум причинам, и обе
-   назывались одним словом «тормозит». Первая: вспышка страны шла через
-   filter с drop-shadow — восемьдесят девять размытий в кадре, и каждое
-   считается заново на каждом кадре. Вторая: луч гас на 88 % своего оборота,
-   а задержки стран доходили до 100 %, поэтому последняя дюжина загоралась
-   уже в темноте — это и читалось как «не до конца доходит».
-   Здесь движется ровно один элемент и ровно двумя свойствами, которые
-   компоновщик умеет делать без перерисовки, а последняя страна встречает
-   свет за 0,15 с до его ухода за кадр. */
-.rmap__field { position: relative; overflow: hidden; }
-.rmap__field::after {
-  content: '';
-  position: absolute;
-  top: -20%;
-  bottom: -20%;
-  left: 0;
-  width: 34%;
-  pointer-events: none;
-  opacity: 0;
-  will-change: transform;
-  background: linear-gradient(90deg,
-    transparent 0,
-    color-mix(in oklab, var(--sig-3) 16%, transparent) 45%,
-    color-mix(in oklab, var(--sig-3) 42%, transparent) 72%,
-    color-mix(in oklab, var(--sig-3) 60%, transparent) 88%,
-    transparent 100%);
-}
-@media (prefers-reduced-motion: no-preference) {
-  .rmap__field.is-sweep::after { animation: dawn 2.05s linear both; }
-  /* Страна проступает под светом. Только прозрачность: transform у фигуры
-     внутри SVG считается от начала координат карты, и страна улетела бы в
-     угол. 0,06 и 1,53 — не на глаз: при ширине полосы 34 % кадра и ходе в
-     395 % своей ширины её светлая кромка приходит на левый край кадра на
-     0,06 с, а на правый — на 1,53 с. */
-  .rmap__field.is-sweep .rmap__land {
-    animation: ink 0.5s ease backwards;
-    animation-delay: calc(0.06s + var(--px, 0) * 1.53s);
-  }
-}
-@keyframes dawn {
-  0% { opacity: 0; transform: translateX(-100%); }
-  7% { opacity: 1; }
-  88% { opacity: 1; }
-  100% { opacity: 0; transform: translateX(295%); }
-}
-
 /* ── Пружины на отклике ───────────────────────────────────────────────── */
 /* Ячейка атласа, фишка региона, имя в «кто в новостях», подсказка поиска —
    всё, что человек трогает десятки раз за визит, отвечает одной кривой с
@@ -2863,20 +2616,10 @@ html.is-theming::view-transition-new(root) {
      Затемнение и без размытия отделяет слой от страницы. */
   .find, .atlas__scrim { backdrop-filter: none; }
 
-  /* Вспышка страны — прозрачностью, а не фильтром: brightness с drop-shadow на
-     девяноста фигурах даёт девяносто отдельных поверхностей за один оборот
-     луча. Пульс остаётся пульсом, только теперь в тень, а не в свет. */
-  .rmap__field.is-sweep .rmap__land path,
-  .rmap__field.is-sweep .rmap__land circle { animation-name: ping-dim; }
-
   /* Круга новой гаммы на телефоне больше нет вовсе — тема переключается
      кадром, см. app.js. Снимок мегабайтной страницы на телефоне берётся
      больше секунды, и всё это время кнопка выглядит неисправной: нажал —
      ничего. Мгновенная перемена честнее круга, которого ждут полторы секунды. */
-}
-@keyframes ping-dim {
-  0%, 100% { opacity: 1; }
-  22% { opacity: 0.4; }
 }
 
 /* ── Ограничения движения ─────────────────────────────────────────────── */
@@ -2884,7 +2627,7 @@ html.is-theming::view-transition-new(root) {
   /* Развёртка, кромка заголовка и морф страны — целиком движение, поэтому не
      замедляются, а не запускаются вовсе: ускоренная до миллисекунды развёртка
      дала бы вспышку по всей карте разом. */
-  .rmap__field::after, .home__title::after { display: none; }
+  .home__title::after { display: none; }
   .home__title { clip-path: none !important; }
   ::view-transition-group(cty) { animation: none; }
   /* Параллакс считает таймлайн прокрутки, длительности у него нет — гасить

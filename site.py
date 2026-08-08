@@ -130,19 +130,6 @@ REGIONS = [
       "namibia", "madagascar", "malawi", "mauritius"]),
 ]
 
-# Карта: готовые пути SVG в проекции Equal Earth, собраны из Natural Earth 110m
-# один раз (make_borders.py). Там же и рамка, и размер кадра, и сетка, и точки
-# шести микрогосударств — здесь ничего не проецируется, чтобы координаты стран
-# и координаты точек не могли разойтись.
-with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       "data", "borders.json")) as _fh:
-    BORDERS = json.load(_fh)
-MAP_W, MAP_H = BORDERS["w"], BORDERS["h"]
-# data/ в репозиторий не идёт, и borders.json на машине может быть старше кода.
-# Без этой проверки нехватка мест под подписи всплыла бы KeyError из недр
-# map_dots посреди часовой сборки.
-assert "spots" in BORDERS, "старый data/borders.json — перегенерируйте make_borders.py"
-
 RU_COUNTRY = {
     "india": "Индия", "pakistan": "Пакистан", "bangladesh": "Бангладеш",
     "sri_lanka": "Шри-Ланка", "nepal": "Непал", "bhutan": "Бутан",
@@ -193,18 +180,6 @@ RU_LANG = {
 # --sig-1..5 в style.css). Важность — величина, а не категория, поэтому
 # шкала последовательная и одноцветная; радуга по величине читается неверно.
 TIERS = (30, 50, 70, 85)
-
-# Подписи на карте. Кегль — в единицах кадра (кадр 1800 в ширину), опорный:
-# app.js держит подпись постоянного размера в пикселях экрана и от этого же
-# кегля считает, во сколько раз карта сейчас крупнее опорного разворота.
-#
-# LABEL_CH — средняя ширина знака в долях кегля. Не на глаз: замерено
-# getComputedTextLength по всем 73 подписям в том самом шрифте, медиана 0.61.
-# MAP_ZOOM_MAX — предел приближения: имя, которому не хватает и его, в разметку
-# не идёт вовсе.
-LABEL_EM = 16
-LABEL_CH = 0.62
-MAP_ZOOM_MAX = 6
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?。！？])\s+")
 _WS = re.compile(r"\s+")
@@ -870,59 +845,6 @@ def days(now, have=(), span=None):
     return out
 
 
-def map_dots(by_country):
-    """Карта охвата: страна — своя фигура в границах, заливка по важности.
-
-    Границы лежат готовыми путями SVG в data/borders.json (см. make_borders.py)
-    уже в координатах кадра. Шести микрогосударствам (Сингапур, Бахрейн,
-    Гонконг, Макао, Мальдивы, Маврикий) на 110-м масштабе фигуры не досталось —
-    они приходят оттуда же точками, иначе просто исчезли бы с карты.
-
-    Заливка — важность верхнего сюжета той же шкалой, что и лента; сколько
-    сюжетов, говорит показание при наведении. Точки идут последними и потому
-    лежат поверх фигур.
-
-    Имя страны стоит прямо на фигуре, если влезает внутрь: карта без подписей
-    читается только наведением, то есть не читается вовсе. Место под имя
-    посчитано в make_borders.py — центр наибольшего вписанного круга и его
-    радиус; отсюда берётся fit, во сколько раз надо приблизить карту, чтобы имя
-    поместилось. При fit ≤ 1 подпись видна сразу, остальные проявляются по мере
-    приближения (см. app.js). Кегль при этом держится постоянным на экране,
-    поэтому чем ближе, тем больше имён помещается.
-    """
-    out = []
-    for c, items in by_country.items():
-        top = items[0] if items else None
-        s = {
-            "key": c,
-            "name": RU_COUNTRY.get(c, settings.country_display(c)),
-            "n": len(items),
-            "score": top["score"] if top else 0,
-            "tier": _tier(top["score"]) if top else 0,
-            "title": top["title"] if top else "",
-            "d": BORDERS["paths"].get(c, ""),
-        }
-        if not s["d"]:
-            s["x"], s["y"] = BORDERS["dots"][c]
-        spot = BORDERS["spots"].get(c)
-        if spot:
-            # Строка вписывается в круг диаметром 2r по диагонали, а не по
-            # стороне квадрата: имя — низкий широкий прямоугольник, и мерка по
-            # квадрату завышала требование к длинным именам в полтора раза —
-            # «Саудовская Аравия» не помещалась в Саудовскую Аравию. Круги у
-            # разных стран не пересекаются, поэтому и подписи внутри них
-            # наехать друг на друга не могут: разбирать столкновения не нужно.
-            diag = math.hypot(len(s["name"]) * LABEL_CH, 1.0) * LABEL_EM
-            fit = diag / (2 * spot[2]) if spot[2] else 99
-            if fit <= MAP_ZOOM_MAX:
-                s["lx"], s["ly"], s["fit"] = spot[0], spot[1], round(fit, 2)
-        out.append(s)
-    # сначала фигуры, потом точки; внутри — по числу сюжетов, чтобы тихая
-    # страна не пропадала под шумной соседкой
-    out.sort(key=lambda s: (not s["d"], -s["n"]))
-    return out
-
-
 def pipeline_status(conn, now):
     last = conn.execute("SELECT MAX(fetched_at) FROM articles").fetchone()[0]
     since = (now - timedelta(hours=settings.WINDOW_HOURS)).isoformat()
@@ -1086,9 +1008,7 @@ def build(out_dir=OUT_DIR):
     # же ленты (см. index.html), а надпись над ним ставит feed().
     _write(os.path.join(out_dir, "index.html"),
            env.get_template("index.html").render(
-               items=everything[:HOME_LIMIT], total=len(everything),
-               dots=map_dots(by_country), map_rest=BORDERS["rest"],
-               map_w=MAP_W, map_h=MAP_H, map_grid=BORDERS["grid"], **ctx))
+               items=everything[:HOME_LIMIT], total=len(everything), **ctx))
 
     for region in regions:
         _write(os.path.join(out_dir, "r", f"{region['slug']}.html"),
@@ -1134,20 +1054,6 @@ def _selfcheck():
         f"лишние {sorted(set(mapped) - set(settings.COUNTRIES))}, "
         f"потерянные {sorted(set(settings.COUNTRIES) - set(mapped))}")
     assert set(RU_COUNTRY) == set(settings.COUNTRIES), "нет русского имени страны"
-
-    # карта: у всех стран есть либо фигура, либо точка, и обе внутри кадра
-    assert 1.3 < MAP_W / MAP_H < 1.7, "кадр карты перекосило"
-    assert BORDERS["grid"].startswith("M"), "сетка карты не собрана"
-    dots = map_dots({"india": [{"score": 96, "title": "т"}] * 40,
-                     "singapore": [{"score": 40, "title": "т"}],
-                     "morocco": []})
-    by = {d["key"]: d for d in dots}
-    assert by["india"]["d"] and by["morocco"]["d"], "страна без границ"
-    assert not by["singapore"]["d"], "Сингапур на 110m — точка"
-    assert 0 < by["singapore"]["x"] < MAP_W and 0 < by["singapore"]["y"] < MAP_H
-    assert [d["key"] for d in dots][-1] == "singapore"  # точки поверх фигур
-    assert by["morocco"]["tier"] == 0 and by["india"]["tier"] == 4
-    assert set(BORDERS["paths"]) | set(BORDERS["dots"]) == set(settings.COUNTRIES)
 
     assert _snippet("") == ""
     assert _snippet("Короткий текст.") == "Короткий текст."
