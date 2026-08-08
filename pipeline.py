@@ -51,6 +51,7 @@ from langdetect import DetectorFactory, LangDetectException, detect
 from trafilatura import bare_extraction
 
 import settings
+import archive_fetch
 import db
 import feeds                # локальный: переиспользуем _cluster для дедупа перед LLM
 import gkg_filter
@@ -382,24 +383,51 @@ ANTIBOT = re.compile(
     r"and cookies|cloudflare ray id|are you a robot|проверка безопасности", re.I)
 
 
+def _pull(raw, url, recall):
+    try:
+        kw = {"favor_recall": True} if recall else {"favor_precision": True}
+        d = bare_extraction(raw, url=url, with_metadata=True,
+                            include_comments=False, **kw)
+    except Exception as exc:
+        log.debug("trafilatura fail %s: %s", url, exc)
+        return None
+    if not d:
+        return None
+    g = (lambda k: getattr(d, k, None)) if hasattr(d, "text") else d.get
+    return (g("text") or "").strip(), (g("title") or "").strip()
+
+
 def _extract(raw, url):
     """Байты страницы -> (текст, заголовок). Именно байты, не str: без charset
     в Content-Type requests угадывает ISO-8859-1 и калечит не-латинские
-    страницы, а trafilatura определяет кодировку по meta/BOM надёжнее."""
-    try:
-        d = bare_extraction(raw, url=url, with_metadata=True,
-                            include_comments=False, favor_precision=True)
-    except Exception as exc:
-        log.debug("trafilatura fail %s: %s", url, exc)
+    страницы, а trafilatura определяет кодировку по meta/BOM надёжнее.
+
+    Разбор идёт в два захода. Первый — на точность: он отрезает всё, в чём не
+    уверен, и на статье с непривычной вёрсткой запросто оставляет пустоту.
+    Второй, на полноту, включается только когда от первого не осталось текста
+    выше порога — терять на этом нечего, страница и так уже была бы отброшена.
+    Замер на ста «пустых» адресах: 26 против 36 (см. archive_fetch).
+    """
+    got = _pull(raw, url, recall=False)
+    if not got or len(got[0]) < settings.MIN_TEXT_LENGTH:
+        got = _pull(raw, url, recall=True) or got
+    if not got:
         return None, None
-    if not d:
-        return None, None
-    g = (lambda k: getattr(d, k, None)) if hasattr(d, "text") else d.get
-    text, title = (g("text") or "").strip(), (g("title") or "").strip()
+    text, title = got
     if ANTIBOT.search(title + " " + text[:1500]):
         log.debug("антибот вместо статьи: %s", url)
         return None, None
     return text, title
+
+
+def _day(raw, url):
+    """Календарная дата страницы по htmldate — запасной вариант для _stamp,
+    когда точного момента в разметке нет."""
+    try:
+        return find_date(raw, url=url, extensive_search=True,
+                         outputformat="%Y-%m-%d")
+    except Exception:
+        return None
 
 
 def fetch_and_extract(url):
@@ -410,17 +438,37 @@ def fetch_and_extract(url):
         log.debug("download fail %s: %s", url, exc)
         return None, None, None
     text, title = _extract(r.content, url)
-    day = None
-    try:
-        day = find_date(r.content, url=url, extensive_search=True, outputformat="%Y-%m-%d")
-    except Exception:
-        pass
-    return text, title, _stamp(r.content, url, day, datetime.now(timezone.utc))
+    return text, title, _stamp(r.content, url, _day(r.content, url),
+                               datetime.now(timezone.utc))
 
 
 def _is_non_event(title, text):
     hay = f"{(title or '').lower()} {(text or '')[:2000].lower()}"
     return any(re.search(p, hay) for p in NON_EVENT)
+
+
+def _from_archive(urls):
+    """Спасение снимком из Web Archive — первая ступень, до браузера.
+
+    Берёт вдвое больше браузера и стоит секунды вместо пятнадцати (замер и
+    вся лестница — в archive_fetch). Идёт подряд, без пула: архив чужой и
+    некоммерческий, пачка потоков заканчивается рванными соединениями.
+    -> {url: (текст, заголовок, дата)}.
+    """
+    out = {}
+    for url in urls:
+        raw = archive_fetch.snapshot(url)
+        if not raw:
+            continue
+        text, title = _extract(raw, url)
+        if text and len(text) >= settings.MIN_TEXT_LENGTH:
+            # Дату читаем из самого снимка: он сырой (id_), баннера архива с
+            # его собственной датой в разметке нет, метки исходной страницы
+            # на месте.
+            out[url] = (text, title, _stamp(raw, url, _day(raw, url),
+                                            datetime.now(timezone.utc)))
+    log.info("Архивом спасено %d из %d", len(out), len(urls))
+    return out
 
 
 def _rescue(urls):
@@ -433,7 +481,7 @@ def _rescue(urls):
 
     Ради этих трёх поднимать браузер в общем цикле незачем — он идёт отдельным
     проходом в конце сбора, одним экземпляром на прогон и только по тем URL,
-    кому текущая неудача последняя. -> {url: (текст, заголовок, дата)}.
+    кого не вытащил архив (_from_archive). -> {url: (текст, заголовок, дата)}.
     """
     out = {}
     if not urls:
@@ -457,8 +505,8 @@ def _rescue(urls):
                     continue
                 text, title = _extract(raw, url)
                 if text and len(text) >= settings.MIN_TEXT_LENGTH:
-                    out[url] = (text, title,
-                                _stamp(raw, url, None, datetime.now(timezone.utc)))
+                    out[url] = (text, title, _stamp(raw, url, _day(raw, url),
+                                                    datetime.now(timezone.utc)))
     except Exception as exc:            # браузер может и не подняться
         log.warning("camoufox не запустился: %s", exc)
     log.info("Браузером спасено %d из %d", len(out), len(urls))
@@ -532,8 +580,11 @@ def collect():
                 elif verdict != "accepted":
                     pending.append((item[0], None, verdict, None))
 
-        # Кого сейчас спишут навсегда — тому браузер, остальным просто «short».
-        rescued = _rescue(_last_chance(conn, [i[0] for i in shorts]))
+        # Кого сейчас спишут навсегда — тех спасаем, остальным просто «short».
+        # Сперва архив (дёшево и берёт больше), браузер — только по остатку.
+        last = _last_chance(conn, [i[0] for i in shorts])
+        rescued = _from_archive(last)
+        rescued.update(_rescue([u for u in last if u not in rescued]))
         for item in shorts:
             got = rescued.get(item[0])
             if not (got and sift(item, got) == "accepted"):

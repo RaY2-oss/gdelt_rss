@@ -614,6 +614,7 @@ def test_browser_rescue_only_on_last_attempt():
          mock.patch.object(pipeline, "fetch_and_extract",
                            side_effect=lambda u: page(u) if u.endswith("/ok")
                            else (None, None, None)), \
+         mock.patch.object(pipeline, "_from_archive", return_value={}), \
          mock.patch.object(pipeline, "_rescue", side_effect=fake_rescue), \
          mock.patch.object(pipeline, "_embed",
                            side_effect=lambda t: np.ones((len(t), settings.EMBEDDING_DIM),
@@ -631,6 +632,65 @@ def test_browser_rescue_only_on_last_attempt():
     assert verdicts["http://r/tired"] == "accepted", verdicts
     assert verdicts["http://r/fresh"] == "short", verdicts
     assert tries["http://r/fresh"] == 1, tries     # одна неудача — одна отметка
+
+
+def test_archive_answers_before_the_browser():
+    """Лестница спасения: архив спрашивается первым, браузеру идёт остаток.
+
+    Архив дешевле браузера впятеро и берёт вдвое больше (замер — в шапке
+    archive_fetch), так что открывать браузер по адресу, который уже отдал
+    архив, — значит выкидывать пятнадцать секунд.
+    """
+    import unittest.mock as mock
+
+    art = ('<html><head><title>Ускоритель в Аммане</title>'
+           '<meta property="article:published_time" content="2026-08-05T09:20:00+00:00">'
+           '</head><body><article><p>'
+           + 'Центр SESAME запустил новую линию синхротронного излучения. ' * 10
+           + '</p></article></body></html>').encode("utf-8")
+    have = {"http://a/1": art}
+    asked = []
+
+    with mock.patch.object(pipeline.archive_fetch, "snapshot",
+                           side_effect=lambda u, **kw: asked.append(u) or have.get(u)):
+        got = pipeline._from_archive(["http://a/1", "http://a/2"])
+
+    assert asked == ["http://a/1", "http://a/2"], asked
+    assert list(got) == ["http://a/1"], got
+    text, title, stamp = got["http://a/1"]
+    assert title == "Ускоритель в Аммане" and len(text) > settings.MIN_TEXT_LENGTH
+    # Дата — из разметки самой статьи, а не из даты снимка: снимок берётся
+    # сырым (id_), баннера архива с его собственным числом в нём нет.
+    assert stamp == "2026-08-05T09:20:00+00:00", stamp
+    # Остаток, который достанется браузеру, считается вычитанием.
+    assert [u for u in have | {"http://a/2": None} if u not in got] == ["http://a/2"]
+
+
+def test_extract_retries_on_recall_when_precision_finds_nothing():
+    """Разбор на точность отрезает всё, в чём не уверен, и на непривычной
+    вёрстке оставляет пустоту. Повтор на полноту добавлял десять статей на ста
+    «пустых» адресах (замер — в шапке archive_fetch). Проверяем порядок:
+    второй заход случается тогда и только тогда, когда от первого нет текста
+    выше порога."""
+    import unittest.mock as mock
+
+    calls = []
+
+    def spy(raw, url, recall):
+        calls.append(recall)
+        return ("з" * 40, "т") if recall is False else ("с" * 900, "т")
+
+    with mock.patch.object(pipeline, "_pull", side_effect=spy):
+        text, _ = pipeline._extract(b"<html></html>", "http://x/a")
+    assert calls == [False, True], calls
+    assert len(text) == 900, "взят короткий разбор вместо полного"
+
+    calls.clear()
+    with mock.patch.object(pipeline, "_pull",
+                           side_effect=lambda raw, url, recall:
+                           calls.append(recall) or ("д" * 900, "т")):
+        pipeline._extract(b"<html></html>", "http://x/b")
+    assert calls == [False], "полный разбор дёрнули без нужды: %r" % (calls,)
 
 
 def test_extract_drops_antibot_shield():
