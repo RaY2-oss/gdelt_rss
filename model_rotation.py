@@ -104,9 +104,19 @@ def _strip_think(content: str) -> str:
     """reasoning-модели (qwen, glm…) оборачивают ответ в <think>…</think> прямо в
     content — берём хвост после последнего закрывающего тега, парсер ждёт чистый
     текст. Нужно на ВСЕХ путях: у OpenRouter в пуле те же reasoning-модели, и без
-    зачистки их ответ падал в разборе оценок, а батч уезжал в «отложен»."""
+    зачистки их ответ падал в разборе оценок, а батч уезжал в «отложен».
+
+    Незакрытая думалка — отдельный случай, и молчать о нём нельзя: модель
+    начала рассуждать и не дошла до ответа (упёрлась в потолок длины или
+    просто забыла закрыть тег). Ответа в таком тексте нет, есть черновик
+    мысли, поэтому отдаём то, что стояло ДО тега, — обычно пустоту. Пустой
+    ответ вызывающий код считает провалом и берёт следующую модель; раньше
+    вместо этого наружу уезжал весь монолог, и в пересказе сюжета он был виден
+    читателю целиком."""
     if "</think>" in content:
         content = content.rsplit("</think>", 1)[-1]
+    elif "<think>" in content:
+        content = content.split("<think>", 1)[0]
     return content.strip()
 
 # None = список ещё не тянули; [] = тянули, пусто/ошибка (повторно не дёргаем).
@@ -234,10 +244,12 @@ def _openrouter_attempt(system_prompt: str, user_message: str, ref_url: str = ""
                     # самой модели). Пул сам восстановится: модель уйдёт в
                     # конец пула, попробуем следующую.
                     raise ValueError(body.get("error", body))
-                content = choices[0]["message"]["content"]
+                content = _strip_think(choices[0]["message"]["content"])
+                if not content:
+                    raise ValueError("пустой ответ: только рассуждение или ничего")
                 _promote(model_id)
                 _batches_processed += 1
-                return _strip_think(content)
+                return content
             except Exception as exc:
                 log.warning(
                     "_call_openrouter_raw не удалось разобрать ответ %s: %s",
@@ -320,7 +332,10 @@ def _openai_chat(url: str, api_key: str, model_id: str,
     )
     if resp.status_code != 200:
         raise ValueError(f"HTTP {resp.status_code}")
-    return _strip_think(resp.json()["choices"][0]["message"]["content"])
+    out = _strip_think(resp.json()["choices"][0]["message"]["content"])
+    if not out:
+        raise ValueError("пустой ответ: только рассуждение или ничего")
+    return out
 
 
 def _try_pool(models, url, api_key, system_prompt, user_message, tag) -> str | None:
