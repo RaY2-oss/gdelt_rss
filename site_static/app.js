@@ -238,7 +238,7 @@
       rows.slice(0, LIMIT).forEach(function (s, i) {
         var li = el('li', 'find__row');
         li.style.setProperty('--w', s[3]);
-        li.style.setProperty('--age', s[10] || 0);
+        li.style.setProperty('--live', s[10] == null ? 1 : s[10]);
         // волна проявления: потолок задержки — чтобы хвост списка не ждал
         li.style.setProperty('--i', Math.min(i, 14));
         li.dataset.tier = tierOf(s[3]);
@@ -808,10 +808,10 @@
       var s = t.s;
       var art = el('article', 'story story--brief');
       art.style.setProperty('--w', s[3]);
-      // Выцветание приезжает из корпуса готовым (см. site.corpus): считать его
-      // здесь по дате нельзя — в корпусе лежит день первой статьи сюжета, а
-      // выцветание идёт от возраста последней.
-      art.style.setProperty('--age', s[10] || 0);
+      // Свежесть приезжает из корпуса готовой (см. site.corpus): считать её
+      // здесь по дате нельзя — в корпусе лежит день ПЕРВОЙ статьи сюжета, а
+      // свежесть идёт от возраста последней. Ею css красит боковую полосу.
+      art.style.setProperty('--live', s[10] == null ? 1 : s[10]);
       art.dataset.tier = tierOf(s[3]);
       art.dataset.day = t.day;
       var sig = el('div', 'story__sig');
