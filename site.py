@@ -24,6 +24,7 @@ import re
 import shutil
 import sys
 import time
+import urllib.robotparser
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
@@ -995,6 +996,35 @@ def _write(path, content):
         f.write(content)
 
 
+# robots.txt — вежливый слой, а не замок: файл выполняет тот, кто хочет.
+# Причина отказа та же, что на /legal.html: тексты принадлежат изданиям,
+# и отдавать их в обучение сайт за издания не вправе.
+#
+# ГЛАВНОЕ, ЧТО НАДО ЗНАТЬ, ПРЕЖДЕ ЧЕМ ПРАВИТЬ ЭТОТ ФАЙЛ.
+# Посетитель получает не его. Cloudflare (managed robots.txt + Content Signals)
+# приклеивает СВОЙ блок ПЕРЕД нашим, и в его блоке уже есть группа
+# «User-agent: *» с «Allow: /». Краулер берёт первую подошедшую группу — значит
+# любое правило, написанное здесь под «User-agent: *», не действует вообще
+# никак. Проверено разбором живого https://rss.bhutyan.online/robots.txt:
+# «Disallow: /search.json» под звёздочкой парсер молча игнорировал.
+# Поэтому здесь только именные группы: имя перекрывает звёздочку.
+#
+# Дублировать имена из блока Cloudflare незачем, он на 09.08.2026 закрывает
+# Amazonbot, Applebot-Extended, Bytespider, CCBot, ClaudeBot,
+# CloudflareBrowserRenderingCrawler, Google-Extended, GPTBot,
+# meta-externalagent. Список ниже — те, кого он не называет. Список короткий
+# намеренно: полное и принудительное перекрытие даёт настройка AI crawlers
+# в панели Cloudflare, а не перечисление имён, которое устаревает само.
+ROBOTS = """User-agent: PerplexityBot
+User-agent: anthropic-ai
+User-agent: Diffbot
+User-agent: Omgili
+User-agent: cohere-ai
+User-agent: YouBot
+Disallow: /
+"""
+
+
 def build(out_dir=OUT_DIR):
     global _translate_until
     now = datetime.now(timezone.utc)
@@ -1130,6 +1160,8 @@ def build(out_dir=OUT_DIR):
     # всеми: подвал у неё общий, и дата сборки на ней та же, что везде.
     _write(os.path.join(out_dir, "legal.html"),
            env.get_template("legal.html").render(**ctx))
+
+    _write(os.path.join(out_dir, "robots.txt"), ROBOTS)
 
     for region in regions:
         _write(os.path.join(out_dir, "r", f"{region['slug']}.html"),
@@ -1303,6 +1335,20 @@ def _selfcheck():
                 f"app.js: var {name} объявлен дважды в одной функции "
                 f"(строки {seen[name]} и {ln} блока) — второй затрёт первый")
             seen[name] = ln
+
+    # robots.txt проверяем разбором, а не глазами. Первое правило важнее
+    # остальных: звёздочка здесь бесполезна — Cloudflare ставит свою группу
+    # «User-agent: *» перед нашей, и наша до краулера не доходит (см. ROBOTS).
+    # Дописал правило под звёздочку — оно ничего не делает, и заметить это
+    # можно только так.
+    assert not re.search(r"^User-agent:\s*\*", ROBOTS, re.M | re.I), \
+        "robots.txt: группа User-agent: * не сработает, её перекрывает Cloudflare"
+    rp = urllib.robotparser.RobotFileParser()
+    rp.parse(ROBOTS.splitlines())
+    assert not rp.can_fetch("PerplexityBot", "/")
+    assert not rp.can_fetch("anthropic-ai", "/c/india.html")
+    assert not rp.can_fetch("YouBot", "/")
+    assert rp.can_fetch("Googlebot", "/c/india.html")
 
     entity_ru._selfcheck()
     print("site selfcheck ok")
