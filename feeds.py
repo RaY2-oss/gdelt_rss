@@ -30,6 +30,7 @@ import settings
 import db
 import entities
 import importance as imp
+import restricted
 import translate
 
 log = logging.getLogger("gdelt_rss")
@@ -197,7 +198,17 @@ def _top_items(rows):
     # Представитель — самый важный по оценке… которой больше нет. Берём самый
     # свежий: внутри кластера это один и тот же сюжет (косинус тел >=
     # DEDUP_BODY_COSINE).
-    return [max(groups[lab], key=lambda r: r[4] or "") for lab, *_ in rank(groups)]
+    #
+    # Издание из restricted представителем не становится: .xml лежат в открытом
+    # доступе. Из кластеризации и важности его при этом не вынимают — сюжет
+    # выходит чужими словами, а не исчезает. Пропадает он только если других
+    # изданий у сюжета нет.
+    def _pick(lab):
+        return max(groups[lab],
+                   key=lambda r: (not restricted.is_restricted(imp.domain(r[0])),
+                                  r[4] or ""))
+    reps = (_pick(lab) for lab, *_ in rank(groups))
+    return [r for r in reps if not restricted.is_restricted(imp.domain(r[0]))]
 
 
 def write_feed(fg, path):

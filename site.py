@@ -38,6 +38,7 @@ import glossary
 import importance as imp
 import feeds
 import overview
+import restricted
 import topics
 from feeds import _pubdate
 
@@ -569,8 +570,16 @@ def stories(conn, rows, country, now):
     out = []
     for key, (lab, weight, age) in zip(keys, ranked):
         members = groups[lab]
+        # Голова сюжета — представитель кластера, но только если его вообще
+        # можно показать: у представителя берутся подводка и оригинальный
+        # заголовок, и от издания из restricted они бы утекли на страницу без
+        # всякой ссылки. Тогда головой становится ближайший показуемый.
+        head_m = next((m for m in members
+                       if not restricted.is_restricted(imp.domain(m[0]))), None)
+        if head_m is None:
+            continue
         (url, title, text, pdate, fetched, _llm, _e, lang, t_en, x_en, _be, ents,
-         t_ru, x_ru) = members[0]
+         t_ru, x_ru) = head_m
         t_en, x_en = en.get(url, (t_en, x_en))
         # Источники: по одному на издание, в порядке «полнее и весомее — выше»
         # (см. source_rank). Раньше порядок повторял отбор головной статьи, то
@@ -582,11 +591,16 @@ def stories(conn, rows, country, now):
         sources, seen_domains = [], set()
         for m in members:
             d = imp.domain(m[0])
-            if d and d not in seen_domains:
+            if d and d not in seen_domains and not restricted.is_restricted(d):
                 seen_domains.add(d)
                 sources.append({"domain": d, "url": _safe_url(m[0]), "head": False,
                                 "rank": source_rank(m[2], d, rmap)})
         sources.sort(key=lambda s: s["rank"], reverse=True)
+        # Сюжет, у которого не осталось ни одного показуемого издания, наружу не
+        # идёт вовсе: цитата без источника заимствования — уже не цитата
+        # (ст. 1274 ГК). В кластеризации и важности он при этом участвовал.
+        if not sources:
+            continue
         by_url = {s["url"]: s["domain"] for s in sources}
 
         # Заголовок — лучший среди заголовков всех источников сюжета, а не
@@ -601,6 +615,10 @@ def stories(conn, rows, country, now):
                 raw = t_ru or t_en or (title if (lang or "") in translate._SKIP_LANGS else "")
             else:
                 raw = m[12] or m[8] or (m[1] if (m[7] or "") in translate._SKIP_LANGS else "")
+            # Заголовок издания из restricted не должен выиграть отбор: он бы
+            # встал в ленту, а подписи «отсюда заголовок» рядом уже не будет.
+            if restricted.is_restricted(imp.domain(m[0])):
+                raw = ""
             cands.append(_clean_title(raw, imp.domain(m[0])) if raw else "")
             tvecs.append(np.frombuffer(m[6], np.float32) if m[6] else None)
         pick = pick_title(cands, tvecs)
@@ -610,8 +628,11 @@ def stories(conn, rows, country, now):
         # Издание у каждой строки обзора — не украшение: предложения взяты
         # дословно из разных источников, и без подписи абзац выглядел бы одним
         # авторским текстом, которым он не является.
+        # Строку из restricted выкидываем здесь, а не полагаемся на by_url:
+        # запасной imp.domain(u) как раз и подставил бы вырезанное имя.
         over = [{"text": s, "domain": by_url.get(_safe_url(u), imp.domain(u)),
-                 "url": _safe_url(u)} for u, s in lines if s]
+                 "url": _safe_url(u)} for u, s in lines
+                if s and not restricted.is_restricted(imp.domain(u))]
         # Дата сюжета — дата САМОЙ РАННЕЙ его статьи, а не представителя (тот
         # выбран по читаемости и свежести). Даты события у нас нет и взять её
         # неоткуда, но «когда о сюжете написали впервые» — ближайшее к ней, что
@@ -1092,6 +1113,11 @@ def build(out_dir=OUT_DIR):
            env.get_template("index.html").render(
                items=everything[:HOME_LIMIT], total=len(everything), **ctx))
 
+    # Правовая страница. Данных ей не нужно никаких, но собирается она вместе со
+    # всеми: подвал у неё общий, и дата сборки на ней та же, что везде.
+    _write(os.path.join(out_dir, "legal.html"),
+           env.get_template("legal.html").render(**ctx))
+
     for region in regions:
         _write(os.path.join(out_dir, "r", f"{region['slug']}.html"),
                env.get_template("region.html").render(
@@ -1207,6 +1233,22 @@ def _selfcheck():
     assert s["day"] == now.strftime("%Y-%m-%d") == days(now)[0]["key"], s["day"]
     [s] = stories(None, [_row(None, None)], "south_korea", now)
     assert s["title"] == "Korean title" and s["lang_code"] == "en"
+
+    # Издания из restricted наружу не идут. Сюжет, у которого других изданий
+    # нет, пропадает целиком; смешанный выходит, но чужими словами — ни в
+    # источниках, ни в заголовке вырезанного домена быть не должно.
+    def _row_at(url, t_ru):
+        r = list(_row(t_ru, "Текст сюжета."))
+        r[0] = url
+        return tuple(r)
+    assert stories(None, [_row_at("https://www.dw.com/a/1", "Заголовок DW")],
+                   "south_korea", now) == []
+    [s] = stories(None, [_row_at("https://www.dw.com/a/1", "Заголовок DW"),
+                         _row_at("https://kbs.co.kr/2", "Заголовок KBS")],
+                  "south_korea", now)
+    assert [x["domain"] for x in s["sources"]] == ["kbs.co.kr"], s["sources"]
+    assert s["title"] == "Заголовок KBS", s["title"]
+    assert s["outlets"] == 1 and s["domain"] == "kbs.co.kr"
 
     # Похожие сюжеты: близкие по вектору находят друг друга, далёкий не
     # притягивается ни к кому, а сюжет без эмбеддинга не роняет расчёт.

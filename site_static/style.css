@@ -1512,6 +1512,28 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
   color: var(--ink-3);
 }
 
+/* ── Страница-документ ────────────────────────────────────────────────── */
+/* Правовая информация: сплошной текст без лент и панелей. Своих приёмов не
+   заводит — ширина строки, ритм заголовков и отступ списка, и всё. */
+.doc {
+  max-width: var(--measure);
+  margin-top: 2rem;
+}
+.doc h2 {
+  margin: 2.25rem 0 0.75rem;
+  font: 900 clamp(1.125rem, 2.4vw, 1.5rem)/1.15 var(--font-display);
+  letter-spacing: -0.025em;
+}
+.doc p { margin: 0 0 0.9rem; }
+.doc ul { margin: 0 0 0.9rem; padding-left: 1.15rem; }
+.doc li { margin-bottom: 0.4rem; }
+.doc a { text-decoration-color: var(--rule-strong); }
+.doc__date {
+  margin-top: 2rem;
+  font: 400 0.8125rem var(--font-data);
+  color: var(--ink-3);
+}
+
 /* ── Орнамент региона ─────────────────────────────────────────────────── */
 /* За страницей страны и региона — геометрия его собственной орнаментальной
    традиции: джали, паранг, сэйгайха, гирих, зеллидж, кенте, ндебеле. Ровно
