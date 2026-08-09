@@ -119,6 +119,12 @@ REPEAT_MIN = 0.62         # доля разных слов в пересказе
 # списывание в той же тридцатке начиналось с двенадцати.
 COPY_RUN = 12
 
+# Заголовок сюжета. Границы те же, что у отбора чужих заголовков в site.py
+# (TITLE_MIN/TITLE_MAX), только уже: своё сочинение не обязано влезать в чужую
+# вёрстку, и рубрика в 20 знаков или подводка в 170 нам не нужны ни та, ни другая.
+HEAD_MIN = 28
+HEAD_MAX = 120
+
 # Насколько новый источник должен отличаться от уже учтённых, чтобы сюжет
 # считался дополненным. По четырёхсловным шинглам: 0.55 значит, что больше
 # половины оборотов в нём не встречались раньше. Ниже порога издание просто
@@ -130,7 +136,7 @@ SHINGLE = 4
 # отбора без смены метки означала бы, что половина витрины ещё полмесяца
 # показывает текст по старым правилам. Меняется отбор — меняется и метка,
 # строки с чужой меткой считаются непосчитанными.
-KIND = "llm-2"
+KIND = "llm-3"
 
 # Сколько времени одна сборка тратит на пересказы. Пересказ стоит около 9 с и
 # один вызов суточной квоты, сюжетов шесть тысяч — за один прогон их не
@@ -543,26 +549,41 @@ def digest(docs, want=WANT, max_chars=MAX_CHARS):
 # ── Пересказ ────────────────────────────────────────────────────────────────
 
 # Правила пронумерованы намеренно: модели пула разные, и на нумерованный
-# список они держатся заметно лучше, чем на абзац тех же требований. Пятое
+# список они держатся заметно лучше, чем на абзац тех же требований. Шестое
 # правило нужно не реже прочих — в кластер попадают пресс-релизы и подборки
 # ссылок, из которых новости не собрать, и лучше отказ, чем связная выдумка.
+#
+# Заголовок пишется тем же вызовом, что и пересказ, а не отдельным: сюжетов
+# шесть тысяч, вызов стоит суточной квоты, общей с судьёй статей, и второй
+# вопрос про тот же текст удвоил бы расход ни за чем. Оба поля идут из одних и
+# тех же отобранных предложений, поэтому и врать порознь им не на чем.
 SYS = (
-    "Ты пересказываешь новость для новостной ленты. На входе — несколько "
-    "предложений из разных изданий об одном событии.\n"
+    "Ты готовишь новость для новостной ленты. На входе — несколько "
+    "предложений из разных изданий об одном событии. Нужны заголовок и "
+    "пересказ.\n"
     "Правила:\n"
     "1. Пиши ТОЛЬКО то, что прямо сказано во входных предложениях. Ничего не "
     "добавляй от себя: ни причин, ни последствий, ни должностей, ни оценок.\n"
     "2. Не переворачивай смысл: отрицание остаётся отрицанием, кто что сделал — "
     "не меняется.\n"
     "3. Своими словами, не переписывай предложения дословно.\n"
-    "4. Одно-два предложения, до 300 знаков, по-русски, нейтрально.\n"
-    "5. Если входные предложения бессвязны, это реклама или в них нет новости — "
+    "4. Пересказ — одно-два предложения, до 300 знаков, по-русски, нейтрально.\n"
+    "5. Заголовок — одна строка 40-110 знаков по-русски, без точки в конце, без "
+    "кавычек вокруг всей строки. Он называет главное событие сюжета, а не "
+    "частность одного издания. Не вопрос, не призыв, не название рубрики.\n"
+    "6. Если входные предложения бессвязны, это реклама или в них нет новости — "
     "ответь ровно: НЕТ\n"
-    "6. Валюту и единицы счёта пиши теми же словами, что во входных "
+    "7. Валюту и единицы счёта пиши теми же словами, что во входных "
     "предложениях: рупии не превращай в рубли, крор — в крону, лакх и крор не "
     "сокращай до буквы.\n"
-    "В ответе — только сам пересказ, без пояснений и кавычек."
+    "Ответ — ровно две строки, без пояснений:\n"
+    "ЗАГОЛОВОК: <заголовок>\n"
+    "ПЕРЕСКАЗ: <пересказ>"
 )
+
+# Разбор ответа. Модели пула помечают строки по-разному — где-то «Заголовок:»,
+# где-то «**ЗАГОЛОВОК**:», — поэтому метка ищется без учёта регистра и звёздочек.
+_TAG = re.compile(r"^\s*[*#\s]*(заголовок|пересказ)[*\s]*[:—-][*\s]*", re.I)
 
 
 def _tidy(text):
@@ -655,8 +676,69 @@ def _copied(text, source):
     return any(tuple(w[i:i + COPY_RUN]) in runs for i in range(len(w) - COPY_RUN + 1))
 
 
+def _split(out):
+    """Ответ модели → (заголовок, пересказ).
+
+    Ответ без меток целиком считается пересказом: так вели себя все модели пула
+    до 09.08.2026, и сюжет от этого остаётся с текстом и без своего заголовка —
+    а не без того и другого.
+    """
+    head, body = "", []
+    for ln in (out or "").splitlines():
+        m = _TAG.match(ln)
+        if not m:
+            body.append(ln)
+            continue
+        rest = ln[m.end():].strip()
+        if m.group(1).lower() == "заголовок":
+            head = rest
+        else:
+            body = [rest]     # всё, что стояло до метки, было шапкой ответа
+    return head, "\n".join(body).strip()
+
+
+def guarded_head(head, source):
+    """Заголовок годен? Те же сторожа, что у пересказа, только строже по длине.
+
+    Врать заголовку нельзя тем более, чем пересказу: его читают на каждой
+    строке ленты, а разворачивают её немногие. Не прошло — сюжет называется
+    по-прежнему, лучшим из заголовков своих изданий (pick_title в site.py).
+    """
+    t = re.sub(r"\s+", " ", (head or "")).strip().replace("‑", "-").rstrip(".… ")
+    # Кавычки вокруг ВСЕЙ строки снимаем, кавычки внутри — ни в коем случае:
+    # «Роскосмос» отчитался о запуске «Союза» начинается и кончается ими же.
+    if len(t) > 2 and t[0] in "«\"'" and t[-1] in "»\"'" \
+            and not re.search(r"[«»\"']", t[1:-1]):
+        t = t[1:-1].strip().rstrip(".… ")
+    if not t or re.fullmatch(r"[«\"']?нет[!»\"']*", t, re.I):
+        return None
+    if "<think" in t.lower():
+        return None
+    if not HEAD_MIN <= len(t) <= HEAD_MAX:
+        return None
+    if _MIXED.search(t):
+        return None
+    # Латиница в имени уместна (Nvidia, ISRO), строка целиком на ней — нет:
+    # это непереведённый заголовок издания, а не наш.
+    if not re.search(r"[а-яё]", t, re.I):
+        return None
+    have = set(_NUM.findall(source))
+    for n in _NUM.findall(t):
+        if n not in have:
+            log.info("overview: заголовок отбракован — число %s не из источника", n)
+            return None
+    if _money(t) - _money(source):
+        return None
+    if t in source or _copied(t, source):
+        return None           # предложение источника заголовком не является
+    return t
+
+
 def make(docs):
-    """Пересказ сюжета. (текст, использованные url) или (None, []).
+    """Заголовок и пересказ сюжета. (текст, использованные url, заголовок).
+
+    Не вышло — (None, [], ""); вышел пересказ без годного заголовка —
+    (текст, url, ""), и сюжет называется по-старому.
 
     Использованные адреса — не весь кластер, а те издания, чьи предложения
     ушли в модель: именно из них пересказ и сложен, и подписывать его надо
@@ -665,7 +747,7 @@ def make(docs):
     global _fails
     picked = digest(docs, want=12, max_chars=SRC_CHARS)
     if not picked:
-        return None, []
+        return None, [], ""
     src = " ".join(s for _u, s in picked)
     out = model_rotation._call_openrouter_raw(SYS, src, ref_url="обзор сюжета")
     if out is None:
@@ -674,9 +756,12 @@ def make(docs):
             log.warning("overview: пул отказал %d раз подряд — пересказы на "
                         "эту сборку прекращены", _fails)
             stop()
-        return None, []
+        return None, [], ""
     _fails = 0
-    return guarded(out, src), list(dict.fromkeys(u for u, _s in picked))
+    head, body = _split(out)
+    return (guarded(body, src),
+            list(dict.fromkeys(u for u, _s in picked)),
+            guarded_head(head, src) or "")
 
 
 # ── Кэш ─────────────────────────────────────────────────────────────────────
@@ -693,7 +778,8 @@ CREATE TABLE IF NOT EXISTS story_overview (
     lines    TEXT NOT NULL,
     kind     TEXT NOT NULL,
     made_at  TEXT NOT NULL,
-    added_at TEXT
+    added_at TEXT,
+    title    TEXT
 );
 CREATE TABLE IF NOT EXISTS story_overview_url (
     url TEXT PRIMARY KEY,
@@ -705,6 +791,11 @@ CREATE INDEX IF NOT EXISTS ix_overview_url_key ON story_overview_url(key);
 
 def ensure(conn):
     conn.executescript(_DDL)
+    # У базы, заведённой до 09.08.2026, колонки title нет: CREATE TABLE IF NOT
+    # EXISTS её не добавит, а ронять таблицу ради одного поля незачем.
+    if not any(r[1] == "title"
+               for r in conn.execute("PRAGMA table_info(story_overview)")):
+        conn.execute("ALTER TABLE story_overview ADD COLUMN title TEXT")
     conn.commit()
 
 
@@ -716,17 +807,17 @@ def key_of(urls):
 
 
 def load(conn, keys):
-    """{ключ: {lines, added, made_at}} для тех ключей, что уже посчитаны."""
+    """{ключ: {lines, title, added, made_at}} для тех ключей, что уже посчитаны."""
     out, keys = {}, list({k for k in keys if k})
     if conn is None:
         return out            # без базы обзор считается на лету и не хранится
     for i in range(0, len(keys), 400):
         chunk = keys[i:i + 400]
-        q = ("SELECT key,lines,made_at,added_at FROM story_overview "
+        q = ("SELECT key,lines,made_at,added_at,title FROM story_overview "
              "WHERE kind=? AND key IN (%s)" % ",".join("?" * len(chunk)))
-        for key, lines, made, added in conn.execute(q, [KIND] + chunk):
+        for key, lines, made, added, title in conn.execute(q, [KIND] + chunk):
             out[key] = {"lines": json.loads(lines), "made_at": made,
-                        "added": bool(added)}
+                        "added": bool(added), "title": title or ""}
     return out
 
 
@@ -744,27 +835,30 @@ def prior(conn, urls):
     row = conn.execute(q, urls).fetchone()
     if not row:
         return None
-    got = conn.execute("SELECT key,urls,lines,made_at,added_at FROM story_overview "
+    got = conn.execute("SELECT key,urls,lines,made_at,added_at,title FROM story_overview "
                        "WHERE key=? AND kind=?", (row[0], KIND)).fetchone()
     if not got:
         return None
     return {"key": got[0], "urls": json.loads(got[1]), "lines": json.loads(got[2]),
-            "made_at": got[3], "added": bool(got[4])}
+            "made_at": got[3], "added": bool(got[4]), "title": got[5] or ""}
 
 
-def store(conn, key, urls, lines, added=False, kind=None):
+def store(conn, key, urls, lines, added=False, kind=None, title=""):
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     conn.execute("INSERT OR REPLACE INTO story_overview"
-                 "(key,urls,lines,kind,made_at,added_at) VALUES (?,?,?,?,?,?)",
+                 "(key,urls,lines,kind,made_at,added_at,title) VALUES (?,?,?,?,?,?,?)",
                  (key, json.dumps(list(urls), ensure_ascii=False),
                   json.dumps(lines, ensure_ascii=False), kind or KIND,
-                  now, now if added else None))
+                  now, now if added else None, title or ""))
     conn.executemany("INSERT OR REPLACE INTO story_overview_url(url,key) VALUES (?,?)",
                      [(u, key) for u in urls])
 
 
 def resolve(conn, cached, key, urls, docs):
-    """Обзор сюжета: из кэша или пересказанный заново. → (строки, дополнен ли).
+    """Обзор сюжета: из кэша или пересказанный заново.
+
+    → (строки, дополнен ли, заголовок). Заголовок пустой — сюжет называет себя
+    сам, лучшим из заголовков своих изданий (pick_title в site.py).
 
     cached — то, что вернул `load` на всю пачку ключей разом: по строке на
     сюжет из базы витрина бы не собралась, их шесть тысяч.
@@ -780,25 +874,25 @@ def resolve(conn, cached, key, urls, docs):
     """
     hit = cached.get(key)
     if hit:
-        return hit["lines"], hit["added"]
+        return hit["lines"], hit["added"], hit.get("title", "")
 
     if not _budget():
-        return [], False
-    text, used = make(docs)
+        return [], False, ""
+    text, used, head = make(docs)
     if not text:
-        return [], False
+        return [], False, ""
     # В паре с текстом — СПИСОК адресов, а не один адрес: пересказ сложен из
     # предложений нескольких изданий, и читателю показывается, из каких именно.
     # Одним изданием такую строку подписать нельзя, ничьим — тоже: вопрос
     # «откуда это взято» законный, и ответ на него у нас есть точный.
     lines = [[used, text]]
     if conn is None:
-        return lines, False
+        return lines, False, head
     old = prior(conn, urls)
     if not old:
-        store(conn, key, urls, lines, added=False)
+        store(conn, key, urls, lines, added=False, title=head)
         conn.commit()
-        return lines, False
+        return lines, False, head
 
     # Сюжет уже был. Дополнением считается только источник с новыми оборотами:
     # перепечатка того же агентства пометки не заслуживает.
@@ -807,14 +901,18 @@ def resolve(conn, cached, key, urls, docs):
     base = " ".join(t for u, t, _h in docs if u in known and t)
     added = bool(fresh) and bool(base) and \
         max(novelty(t, base) for t in fresh) >= NOVELTY
-    store(conn, key, urls, lines if added else old["lines"],
-          added=added or old["added"])
+    # Заголовок держится за свой текст: показан старый обзор — показан и старый
+    # заголовок. Иначе строка называлась бы по новой версии сюжета, а
+    # рассказывала прежнюю. Пустой новый заголовок старого не стирает.
+    keep = old["lines"] if not added else lines
+    title = (head if added else "") or old.get("title", "") or head
+    store(conn, key, urls, keep, added=added or old["added"], title=title)
     # Фиксируем сразу, а не пачкой на страну: между двумя пересказами проходят
     # секунды, и открытая транзакция на всю страну блокировала бы сбор и
     # переводчик до конца страны (они пишут в ту же базу и падают по таймауту
     # в 30 с). При отборе это стоило 20 мс и вопроса не было.
     conn.commit()
-    return (lines if added else old["lines"]), (added or old["added"])
+    return keep, (added or old["added"]), title
 
 
 def sweep(conn):
@@ -1081,13 +1179,43 @@ def _selfcheck():
             "и объявил заблоковку в трьих штатах.")
     assert guarded(loop, loop[:70] + " Об этом сообщили в профсоюзе.") is None
 
+    # Разбор ответа: две помеченные строки, метки в любом регистре и в жирном.
+    assert _split("ЗАГОЛОВОК: Профсоюз энергетиков объявил забастовку\n"
+                  "ПЕРЕСКАЗ: Забастовка начнётся в понедельник.") == \
+        ("Профсоюз энергетиков объявил забастовку", "Забастовка начнётся в понедельник.")
+    assert _split("**Заголовок:** А\n\n**Пересказ:** Б")[0] == "А"
+    # Ответ без меток — целиком пересказ: сюжет остаётся с текстом и со своим
+    # прежним заголовком, а не без того и другого.
+    assert _split("Просто пересказ одной строкой.") == \
+        ("", "Просто пересказ одной строкой.")
+    assert _split("НЕТ") == ("", "НЕТ")
+
+    # Сторож заголовка.
+    head_src = ("Профсоюз энергетиков объявил о забастовке с понедельника в трёх "
+                "штатах страны, сообщил министр Джозеф Тегбе.")
+    good_head = "Энергетики трёх штатов объявили забастовку с понедельника"
+    assert guarded_head(good_head, head_src) == good_head
+    assert guarded_head("«" + good_head + "».", head_src) == good_head
+    # Кавычки внутри строки не трогаем, даже когда она ими начинается и кончается.
+    quoted = "«Росатом» подтвердил договорённости с профсоюзом «Энергия»"
+    assert guarded_head(quoted, head_src) == quoted
+    assert guarded_head("Забастовка", head_src) is None          # рубрика, не заголовок
+    assert guarded_head("Union declares strike in three states of the country",
+                        head_src) is None                        # не переведено
+    assert guarded_head("Забастовка энергетиков охватит 5 штатов с понедельника",
+                        head_src) is None                        # числа нет в источнике
+    assert guarded_head("НЕТ", head_src) is None
+    # Предложение источника заголовком не является: это перепечатка.
+    assert guarded_head("Профсоюз энергетиков объявил о забастовке с понедельника "
+                        "в трёх штатах страны", head_src) is None
+
     assert key_of(["b", "a"]) == key_of(["a", "b", "a"])
 
     # Бюджет закрыт (begin не звали) — обзора нет и модель не грузится. Это же
     # и защита витрины: без явного разрешения сборка не уходит в пересказы на
     # сутки, а сюжет остаётся без текста, но и без чужого абзаца.
     assert not _budget()
-    assert resolve(None, {}, "k", ["u"], [("u", lead, "")]) == ([], False)
+    assert resolve(None, {}, "k", ["u"], [("u", lead, "")]) == ([], False, "")
     print("overview selfcheck ok")
 
 

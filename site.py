@@ -595,7 +595,7 @@ def stories(conn, rows, country, now):
             d = imp.domain(m[0])
             if d and d not in seen_domains and not restricted.is_restricted(d):
                 seen_domains.add(d)
-                sources.append({"domain": d, "url": _safe_url(m[0]), "head": False,
+                sources.append({"domain": d, "url": _safe_url(m[0]),
                                 "rank": source_rank(m[2], d, rmap)})
         sources.sort(key=lambda s: s["rank"], reverse=True)
         # Сюжет, у которого не осталось ни одного показуемого издания, наружу не
@@ -605,11 +605,13 @@ def stories(conn, rows, country, now):
             continue
         by_url = {s["url"]: s["domain"] for s in sources}
 
-        # Заголовок — лучший среди заголовков всех источников сюжета, а не
-        # заголовок статьи-победителя (см. pick_title). Кандидат годится, только
-        # если его есть на чём показать: перевод в кэше или язык, который
-        # переводить нечего. Непереведённый китайский заголовок в русской ленте
-        # хуже любого неудачного русского.
+        # Запасной заголовок — лучший среди заголовков всех источников сюжета
+        # (см. pick_title). Он идёт в дело, пока своего заголовка у сюжета нет:
+        # его пишет пул вместе с пересказом, а тот считается по бюджету и не
+        # каждой сборке достаётся. Кандидат годится, только если его есть на чём
+        # показать: перевод в кэше или язык, который переводить нечего.
+        # Непереведённый китайский заголовок в русской ленте хуже любого
+        # неудачного русского.
         import numpy as np
         cands, tvecs = [], []
         for m in members:
@@ -617,14 +619,14 @@ def stories(conn, rows, country, now):
                 raw = t_ru or t_en or (title if (lang or "") in translate._SKIP_LANGS else "")
             else:
                 raw = m[12] or m[8] or (m[1] if (m[7] or "") in translate._SKIP_LANGS else "")
-            # Заголовок издания из restricted не должен выиграть отбор: он бы
-            # встал в ленту, а подписи «отсюда заголовок» рядом уже не будет.
+            # Заголовок издания из restricted не должен выиграть отбор: имя
+            # этого издания на витрину не идёт, а заголовок — его слова.
             if restricted.is_restricted(imp.domain(m[0])):
                 raw = ""
             cands.append(_clean_title(raw, imp.domain(m[0])) if raw else "")
             tvecs.append(np.frombuffer(m[6], np.float32) if m[6] else None)
         pick = pick_title(cands, tvecs)
-        lines, updated = overview.resolve(
+        lines, updated, over_head = overview.resolve(
             conn, cached, key, [m[0] for m in members],
             [_ru_doc((m[0], m[1], m[2], m[7], m[12], m[13])) for m in members])
         # Обзор — пересказ, и подписан он не одним изданием, а СПИСКОМ тех, чьи
@@ -656,16 +658,12 @@ def stories(conn, rows, country, now):
         # показана отдельно, боковой полосой (live) — см. --live в style.css.
         score = round(weight * 100)
         head = sources[0]["domain"] if sources else ""
-        clean = (cands[pick] if pick is not None else "") or url
-        # Издание, чей заголовок выиграл отбор, помечается в списке источников:
-        # заголовок больше не ссылка, и иначе неоткуда узнать, чьими словами
-        # сюжет назван.
-        if pick is not None:
-            won = _safe_url(members[pick][0])
-            for src in sources:
-                if src["url"] == won:
-                    src["head"] = True
-                    break
+        # Заголовок сюжета пишет пул по тем же отобранным предложениям, что и
+        # пересказ (overview.make): сюжет собран из нескольких изданий, и
+        # называть его словами одного из них — выдавать частность за общее.
+        # Пока своего заголовка нет — бюджет пересказов конечен, а сюжетов
+        # шесть тысяч, — строка называется лучшим из чужих, как раньше.
+        clean = over_head or (cands[pick] if pick is not None else "") or url
         out.append({
             # Адрес сюжета — у того издания, что возглавило список источников,
             # а не у представителя кластера: рядом стоит `domain`, взятый
@@ -685,8 +683,13 @@ def stories(conn, rows, country, now):
             # корейский заголовок русским текстом. Показываем язык ТОГО, что
             # реально в заголовке: русский перевод — язык страницы (пусто),
             # английский — en, и только без перевода — язык оригинала.
-            "lang_code": "" if t_ru else ("en" if t_en else (lang or "").strip()),
-            "translated": bool(t_ru or t_en),
+            # Оба поля описывают ЗАГОЛОВОК, а не сюжет. Свой заголовок написан
+            # по-русски и переводом не является: пометка «пер. с корейского»
+            # рядом с ним соврала бы, а lang="ko" заставил бы скринридер читать
+            # русскую строку по-корейски. Язык оригинала при этом никуда не
+            # девается — он остаётся в поле lang и подписан обычной меткой.
+            "lang_code": "" if (over_head or t_ru) else ("en" if t_en else (lang or "").strip()),
+            "translated": bool(not over_head and (t_ru or t_en)),
             "score": score,
             "tier": _tier(score),
             # Порядок ленты — важность × свежесть; наружу едет отдельно от

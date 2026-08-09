@@ -1340,11 +1340,6 @@ html.is-atlas .atlas__inner > * { opacity: 1; transform: none; }
 }
 .story__solo a { color: inherit; text-decoration-color: var(--rule); }
 
-/* «заголовок отсюда» у первого издания списка: главный источник больше не
-   стоит отдельной подписью в выходных данных, и без этой пометки было бы
-   непонятно, куда ведёт сам заголовок. */
-.story__head { font-style: normal; color: var(--ink-3); opacity: 0.7; }
-
 .story__more { margin-top: 0.625rem; }
 .story__summary {
   font: 400 0.75rem var(--font-data);
